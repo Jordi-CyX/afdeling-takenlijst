@@ -1,0 +1,10 @@
+/* Protest Guerrilla — SIL Open Font License 1.1 (see OFL-protest-guerrilla.txt)
+   Source: Google Fonts / https://github.com/octaviopardo/Protest
+   Use together with the HORNBACH CSS variables in ../styles.css */
+@font-face {
+  font-family: "Protest Guerrilla";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("protest-guerrilla.woff2") format("woff2");
+}

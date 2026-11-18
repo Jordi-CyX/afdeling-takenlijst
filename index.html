@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#FF7A00">
+  <meta name="theme-color" content="#F99D27">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -14,12 +14,25 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
   <header>
     <div class="header-inner">
       <h1>Zeiklijst Live</h1>
+      <div class="header-actions">
+        <div class="view-toggle" role="group" aria-label="Weergave">
+          <button type="button" id="view-list" class="view-btn" aria-pressed="true" aria-label="Lijstweergave" title="Lijstweergave">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2.5H4V6zm0 4.75h16v2.5H4v-2.5zm0 4.75h16V18H4v-2.5z"/></svg>
+          </button>
+          <button type="button" id="view-tiles" class="view-btn" aria-pressed="false" aria-label="Tegelweergave" title="Tegelweergave">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg>
+          </button>
+        </div>
+        <a href="admin/" class="app-switch" aria-label="Naar Zeiklijst Admin">
+          <img src="admin/icons/icon-192.png" alt="" width="32" height="32">
+        </a>
+      </div>
     </div>
   </header>
 
@@ -34,6 +47,7 @@
     <div class="modal-content">
       <button type="button" class="close" id="modal-close" aria-label="Sluiten">&times;</button>
       <h2 id="modal-title"></h2>
+      <p id="modal-location" hidden></p>
       <p id="modal-assignee"></p>
       <div id="modal-status"></div>
       <div id="modal-description"></div>
@@ -50,6 +64,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=6"></script>
+  <script type="module" src="app.js?v=9"></script>
 </body>
 </html>

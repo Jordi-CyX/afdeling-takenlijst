@@ -60,11 +60,32 @@ function startListeners() {
   });
 }
 
+const VIEW_KEY = "zeiklijst-view";
+
+function currentView() {
+  return localStorage.getItem(VIEW_KEY) === "tiles" ? "tiles" : "list";
+}
+
+function applyView(view) {
+  const mode = view === "tiles" ? "tiles" : "list";
+  localStorage.setItem(VIEW_KEY, mode);
+  const list = document.getElementById("task-list");
+  list.classList.toggle("view-tiles", mode === "tiles");
+  list.classList.toggle("view-list", mode === "list");
+  const listBtn = document.getElementById("view-list");
+  const tilesBtn = document.getElementById("view-tiles");
+  if (listBtn) listBtn.setAttribute("aria-pressed", String(mode === "list"));
+  if (tilesBtn) tilesBtn.setAttribute("aria-pressed", String(mode === "tiles"));
+}
+
 function setupUi() {
   document.getElementById("modal-close").onclick = closeModal;
   document.getElementById("modal").onclick = (event) => {
     if (event.target.id === "modal") closeModal();
   };
+  document.getElementById("view-list").onclick = () => applyView("list");
+  document.getElementById("view-tiles").onclick = () => applyView("tiles");
+  applyView(currentView());
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkDateChange();
   });
@@ -101,6 +122,7 @@ function renderTasks() {
     return;
   }
   list.innerHTML = active.map(taskItemHtml).join("");
+  applyView(currentView());
   list.querySelectorAll(".task-item").forEach((el) => {
     const open = () => openTask(el.dataset.taskId);
     el.addEventListener("click", open);
@@ -114,29 +136,19 @@ function renderTasks() {
 }
 
 function taskItemHtml(task) {
-  const badges = [`<span class="badge ${task.status}">${STATUS_SAFE(task.status)}</span>`];
-  if (isRecurring(task)) badges.unshift('<span class="badge recurring">Herhalend</span>');
+  const location = (task.location || "").trim();
+  const pendingMark = task.status === "pending"
+    ? '<div class="badge-row"><span class="badge pending">Pending</span></div>'
+    : "";
   return `
     <div class="task-item ${task.status}" role="button" tabindex="0" data-task-id="${escapeAttr(task.id)}">
       <div>
         <div class="task-title">${escapeHtml(task.title)}</div>
-        <div class="task-meta">Toegewezen aan: ${escapeHtml(assigneeLabel(task))}</div>
-        ${task.createdAt ? `<div class="task-meta">Aangemaakt op ${escapeHtml(formatDateTime(task.createdAt))}</div>` : ""}
-        ${pendingMeta(task)}
+        <div class="task-location${location ? "" : " hidden"}">${escapeHtml(location)}</div>
       </div>
-      <div class="badge-row">${badges.join("")}</div>
+      ${pendingMark}
     </div>
   `;
-}
-
-function STATUS_SAFE(status) {
-  return status === "open" ? "Open" : status === "pending" ? "Pending" : status === "afgerond" ? "Afgerond" : escapeHtml(status);
-}
-
-function pendingMeta(task) {
-  if (!task.pendingAt) return "";
-  const by = task.pendingBy ? ` door ${escapeHtml(task.pendingBy)}` : "";
-  return `<div class="task-meta">Afgevinkt op ${escapeHtml(formatDateTime(task.pendingAt))}${by}</div>`;
 }
 
 function openTask(id) {
@@ -144,8 +156,13 @@ function openTask(id) {
   if (!task) return;
   currentTaskId = id;
   document.getElementById("modal-title").textContent = task.title;
+  const location = (task.location || "").trim();
+  const locEl = document.getElementById("modal-location");
+  locEl.textContent = location;
+  locEl.hidden = !location;
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
-  const statusBadges = [`<span class="badge ${task.status}">${STATUS_SAFE(task.status)}</span>`];
+  const statusBadges = [];
+  if (task.status === "pending") statusBadges.push('<span class="badge pending">Pending</span>');
   if (isRecurring(task)) statusBadges.push('<span class="badge recurring">Herhalend</span>');
   document.getElementById("modal-status").innerHTML = statusBadges.join("");
   const extra = [];

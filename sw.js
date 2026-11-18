@@ -1,4 +1,4 @@
-const CACHE_NAME = "zeiklijst-v6";
+const CACHE_NAME = "zeiklijst-v9";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
@@ -12,6 +12,8 @@ const ASSETS = [
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
   "./fonts/rubik-dirt.woff2",
+  "./fonts/protest-guerrilla.woff2",
+  "./fonts/zeiklijst-display.css",
   "./logo.png",
   "./logo.svg",
   `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-app.js`,
