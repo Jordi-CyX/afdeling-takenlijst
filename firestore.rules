@@ -5,6 +5,14 @@
 // - Optie A: accounts zonder startCode (oude methode) worden voor alles geweigerd (isValidStaff).
 // - Een pincode-resetverzoek blijft alleen een verzoek; het geeft geen toegang.
 // - Foto's moeten data:image/(jpeg|png|webp);base64,... zijn.
+// STAP 3 (veiligheidsaudit 18-11-2026 23:05)
+// - H1/M1: nameIndex alleen nog voor admin; claim = staffAccounts + startCodes (geen loginKey meer).
+//   Een startcode is voor niet-admins alleen te lezen zolang hij ongebruikt en niet verlopen is.
+// - M2: pinResetRequests met willekeurig id, {name 1-60, requestedAt, note <= 200}, alleen aanmaken.
+// - M3/L9: limieten op alle staff-strings/-lijsten/-foto's (foto <= 250000 tekens), datums vandaag +/- 1 dag.
+// - L1: streefdatum in taskMeta/{taskId} (alleen admin + reader).
+// - L2: afvinken alleen eigen taak, "Allen" of niet toegewezen; terugzetten alleen door wie afvinkte.
+// - L3: medewerkers lezen alleen hun eigen employees-doc (geen lijst).
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -76,6 +84,30 @@ service cloud.firestore {
         && request.auth.token.email.lower() == expected;
     }
 
+    // ISO-datum/tijd zoals new Date().toISOString(), max 40 tekens.
+    function isIsoDateTime(s) {
+      return s is string
+        && s.size() <= 40
+        && s.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+\\-][0-9]{2}:[0-9]{2})$");
+    }
+
+    // Kalenderdag (UTC-middernacht) van een string die begint met YYYY-MM-DD.
+    function dayOf(s) {
+      let p = s.split("T")[0].split("-");
+      return timestamp.date(int(p[0]), int(p[1]), int(p[2]));
+    }
+
+    // Dag ligt tussen (vandaag - daysBack) en (vandaag + daysAhead), met 1 dag marge voor tijdzones.
+    function isNearToday(s, daysBack, daysAhead) {
+      return dayOf(s) >= request.time - duration.value(daysBack + 1, "d")
+        && dayOf(s) <= request.time + duration.value(daysAhead, "d");
+    }
+
+    // Maximale fotogrootte (tekens van de data-URL), ca. 180 KB beeld. Gelijk aan ZL v19.
+    function maxPhotoChars() {
+      return 250000;
+    }
+
     // Alleen veilige foto's: data:image/(jpeg|png|webp);base64,...
     function isSafePhoto(p, maxSize) {
       return p is string
@@ -100,6 +132,7 @@ service cloud.firestore {
       return data.recurringId is string
         && data.occurrenceDate is string
         && data.occurrenceDate.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+        && data.recurringId.size() <= 100
         && taskId == data.recurringId + "_" + data.occurrenceDate;
     }
 
@@ -132,7 +165,9 @@ service cloud.firestore {
         && data.description is string
         && data.assigneeId is string
         && data.assigneeName is string
-        && data.createdAt is string
+        && isIsoDateTime(data.createdAt)
+        && isNearToday(data.createdAt, 1, 1)
+        && isNearToday(data.occurrenceDate, 1, 1)
         && (!("pendingAt" in data) || data.pendingAt == null)
         && (!("pendingBy" in data) || data.pendingBy == null)
         && (!("completedAt" in data) || data.completedAt == null)
@@ -149,21 +184,25 @@ service cloud.firestore {
         || request.resource.data.pendingByEmployeeId == null;
     }
 
-    function pendingByEmployeeIdOk() {
-      return pendingByEmployeeIdCleared()
-        || request.resource.data.pendingByEmployeeId == staffEmployeeId();
+    // L2: alleen eigen taak, taak voor "Allen" of niet-toegewezen taak.
+    function isOwnOrSharedTask() {
+      return resource.data.get("assigneeId", "") in [staffEmployeeId(), "ALLEN", "", null];
     }
 
     function isStatusToggle() {
-      return request.resource.data.diff(resource.data).affectedKeys()
+      return isOwnOrSharedTask()
+        && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(["status", "pendingAt", "pendingBy", "pendingByEmployeeId"])
         && (
           (
             resource.data.status == "open"
             && request.resource.data.status == "pending"
-            && request.resource.data.pendingAt is string
+            && isIsoDateTime(request.resource.data.pendingAt)
+            && isNearToday(request.resource.data.pendingAt, 1, 1)
+            && request.resource.data.pendingBy is string
+            && request.resource.data.pendingBy.size() <= 60
             && request.resource.data.pendingBy == staffEmployee().name
-            && pendingByEmployeeIdOk()
+            && request.resource.data.get("pendingByEmployeeId", null) == staffEmployeeId()
           )
           || (
             resource.data.status == "pending"
@@ -171,6 +210,7 @@ service cloud.firestore {
             && request.resource.data.pendingAt == null
             && request.resource.data.pendingBy == null
             && pendingByEmployeeIdCleared()
+            && resource.data.get("pendingByEmployeeId", null) in [staffEmployeeId(), null]
           )
         );
     }
@@ -208,12 +248,12 @@ service cloud.firestore {
         && data.assigneeId == staffEmployeeId()
         && data.assigneeName == staffEmployee().name
         && data.status == "open"
-        && data.createdAt is string
-        && data.createdAt.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+\\-][0-9]{2}:[0-9]{2})$")
+        && isIsoDateTime(data.createdAt)
+        && isNearToday(data.createdAt, 1, 1)
         && (!("photos" in data) || (
           data.photos is list
           && data.photos.size() <= 1
-          && (data.photos.size() == 0 || isSafePhoto(data.photos[0], 716800))
+          && (data.photos.size() == 0 || isSafePhoto(data.photos[0], maxPhotoChars()))
         ))
         && data.createdByRole == "staff"
         && data.createdByEmployeeId == staffEmployeeId()
@@ -240,9 +280,14 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
-    // Eigen medewerker-doc, ook als inactief: alleen get, alleen met geldig staffAccount
-    // (zelfde employeeId, geldige startCode, pinVersion klopt). Zo kan de app
-    // "Je account is niet actief" tonen. Geeft verder geen toegang.
+    // L1: streefdatum en andere adminvelden per taak; medewerkers kunnen dit niet lezen.
+    match /taskMeta/{taskId} {
+      allow read: if isAdmin() || isReader();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // L3: medewerkers lezen alleen hun eigen medewerker-doc (ook als inactief), met een geldig
+    // staffAccount (zelfde employeeId, geldige startCode, pinVersion klopt). Geen lijst.
     function isOwnEmployeeDoc(employeeId) {
       return isSignedIn()
         && exists(staffAccountPath())
@@ -252,33 +297,14 @@ service cloud.firestore {
     }
 
     match /employees/{employeeId} {
-      allow get: if isAdmin() || isValidStaff() || isReader() || isOwnEmployeeDoc(employeeId);
-      allow list: if isAdmin() || isValidStaff() || isReader();
+      allow get: if isAdmin() || isReader() || isOwnEmployeeDoc(employeeId);
+      allow list: if isAdmin() || isReader();
       allow create, update, delete: if isAdmin();
     }
 
+    // H1/M1: nameIndex is alleen nog voor de admin (medewerkers gebruiken het niet meer).
     match /nameIndex/{nameKey} {
-      allow get: if isSignedIn();
-      allow list: if isAdmin();
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || isStaffNameIndexClaim();
-    }
-
-    // Stap 3 van de claim-batch: {hasPin:true, loginKey: code.lower()}.
-    // Alleen toegestaan als dezelfde batch een geldig staffAccounts/{uid} met die startcode aanmaakt.
-    function isStaffNameIndexClaim() {
-      let after = getAfter(staffAccountPath()).data;
-      return isSignedIn()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hasPin", "loginKey"])
-        && resource.data.hasPin == false
-        && request.resource.data.hasPin == true
-        && resource.data.employeeId is string
-        && resource.data.pinVersion is int
-        && existsAfter(staffAccountPath())
-        && isStartCodeFormat(after.startCode)
-        && after.employeeId == resource.data.employeeId
-        && after.pinVersion == resource.data.pinVersion
-        && request.resource.data.loginKey == after.startCode.lower();
+      allow read, write: if isAdmin();
     }
 
     match /staffAccounts/{uid} {
@@ -309,8 +335,10 @@ service cloud.firestore {
         && getAfter(startCodePath(data.startCode)).data.usedBy == uid;
     }
 
+    // Niet-admins: alleen een ongebruikte, niet-verlopen code opvragen (doc-id = code).
     match /startCodes/{code} {
-      allow get: if isSignedIn();
+      allow get: if isAdmin()
+        || (isSignedIn() && resource.data.used == false && resource.data.expiresAt > request.time);
       allow list: if isAdmin();
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || isStartCodeClaim(code);
@@ -332,19 +360,23 @@ service cloud.firestore {
         && after.pinVersion == resource.data.pinVersion;
     }
 
-    match /pinResetRequests/{employeeId} {
+    // M2: verzoek met willekeurig id (bijv. addDoc), alleen aanmaken, nooit overschrijven.
+    // De admin koppelt de naam zelf aan een medewerker. (Geen rate-limit mogelijk in regels.)
+    match /pinResetRequests/{requestId} {
       allow read, delete: if isAdmin();
-      allow create: if isSignedIn() && isValidPinResetCreate(employeeId);
-      allow update: if isSignedIn() && isValidPinResetCreate(employeeId);
+      allow create: if isSignedIn() && isValidPinResetCreate(requestId);
     }
 
-    function isValidPinResetCreate(employeeId) {
+    function isValidPinResetCreate(requestId) {
       let data = request.resource.data;
-      return data.keys().hasOnly(["employeeId", "name", "requestedAt"])
-        && data.employeeId == employeeId
+      return requestId.matches("^[A-Za-z0-9]{16,40}$")
+        && data.keys().hasOnly(["name", "requestedAt", "note"])
+        && data.keys().hasAll(["name", "requestedAt"])
         && data.name is string
+        && data.name.trim().size() >= 1
+        && data.name.size() <= 60
         && data.requestedAt == request.time
-        && exists(/databases/$(database)/documents/employees/$(employeeId));
+        && (!("note" in data) || (data.note is string && data.note.size() <= 200));
     }
 
     function isValidReportCreate() {
@@ -362,7 +394,7 @@ service cloud.firestore {
         && data.description is string
         && data.description.size() >= 1
         && data.description.size() <= 1000
-        && (!("photo" in data) || isSafePhoto(data.photo, 700000))
+        && (!("photo" in data) || isSafePhoto(data.photo, maxPhotoChars()))
         && data.employeeId == staffEmployeeId()
         && data.employeeName == staffEmployee().name
         && data.createdAt == request.time
