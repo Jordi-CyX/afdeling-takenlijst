@@ -206,7 +206,10 @@ export function normalizeTask(id, data) {
     pendingBy: d.pendingBy || null,
     completedAt: toIso(d.completedAt || d.completed),
     recurringId: d.recurringId || d.templateId || null,
-    occurrenceDate: d.occurrenceDate || d.instanceDate || null
+    occurrenceDate: d.occurrenceDate || d.instanceDate || null,
+    rejectedCount: Number(d.rejectedCount) || 0,
+    rejections: Array.isArray(d.rejections) ? d.rejections : [],
+    lastRejectedAt: toIso(d.lastRejectedAt)
   };
 }
 

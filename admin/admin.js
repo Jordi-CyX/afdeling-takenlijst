@@ -7,6 +7,7 @@ import {
   signInWithEmailAndPassword,
   signOut
 } from "../firebase-init.js";
+import { increment, arrayUnion } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   db,
   doc,
@@ -50,6 +51,18 @@ let knownDate = localDateKey(new Date());
 let listenersStarted = false;
 let generating = false;
 let seededOnce = false;
+
+const SECTION_KEY = "zeiklijst-admin-section";
+const SECTIONS = ["dashboard", "medewerkers", "taken", "controle", "workflow", "data"];
+const SECTION_LABELS = {
+  dashboard: "Dashboard",
+  medewerkers: "Medewerkers",
+  taken: "Taken",
+  controle: "Controle",
+  workflow: "Workflow",
+  data: "Data"
+};
+let currentSection = "dashboard";
 
 function weekdayNames(values) {
   const map = new Map(WEEKDAYS.map((day) => [day.value, day.long]));
@@ -97,12 +110,30 @@ function applyAuthUi() {
   if (isAdmin) {
     offerMigrationIfNeeded();
     startListeners();
+    showSection(readStoredSection(), false);
+  } else {
+    closeNav();
   }
 }
 
 function setupUi() {
   document.getElementById("login-form").onsubmit = submitLogin;
   document.getElementById("logout-btn").onclick = logout;
+  document.getElementById("nav-toggle").onclick = (event) => {
+    event.stopPropagation();
+    toggleNav();
+  };
+  document.getElementById("nav-menu").querySelectorAll("[data-section]").forEach((btn) => {
+    btn.onclick = () => showSection(btn.dataset.section);
+  });
+  document.addEventListener("click", (event) => {
+    const nav = document.getElementById("admin-nav");
+    if (nav && !nav.contains(event.target)) closeNav();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeNav();
+  });
+  document.getElementById("workflow-period").onchange = renderWorkflow;
   document.getElementById("export-btn").onclick = exportData;
   document.getElementById("import-btn").onclick = () => document.getElementById("import-file").click();
   document.getElementById("import-file").onchange = importData;
@@ -375,6 +406,58 @@ function describeRecurrence(template) {
   return "Herhalend";
 }
 
+function readStoredSection() {
+  const stored = localStorage.getItem(SECTION_KEY);
+  return SECTIONS.includes(stored) ? stored : "dashboard";
+}
+
+function toggleNav() {
+  const open = document.getElementById("nav-menu").classList.contains("hidden");
+  if (open) openNav();
+  else closeNav();
+}
+
+function openNav() {
+  document.getElementById("nav-menu").classList.remove("hidden");
+  document.getElementById("nav-toggle").setAttribute("aria-expanded", "true");
+}
+
+function closeNav() {
+  const menu = document.getElementById("nav-menu");
+  if (!menu) return;
+  menu.classList.add("hidden");
+  document.getElementById("nav-toggle").setAttribute("aria-expanded", "false");
+}
+
+function showSection(name, persist = true) {
+  const section = SECTIONS.includes(name) ? name : "dashboard";
+  currentSection = section;
+  if (persist) localStorage.setItem(SECTION_KEY, section);
+  document.querySelectorAll(".admin-section").forEach((el) => {
+    el.classList.toggle("hidden", el.dataset.section !== section);
+  });
+  document.getElementById("nav-current").textContent = SECTION_LABELS[section];
+  document.querySelectorAll("#nav-menu [data-section]").forEach((btn) => {
+    if (btn.dataset.section === section) btn.setAttribute("aria-current", "page");
+    else btn.removeAttribute("aria-current");
+  });
+  closeNav();
+}
+
+function pendingCount() {
+  return tasks.filter((task) => task.status === "pending").length;
+}
+
+function updateNavBadge() {
+  const count = pendingCount();
+  ["nav-badge", "nav-controle-badge"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = String(count);
+    el.classList.toggle("hidden", count < 1);
+  });
+}
+
 function renderAll() {
   fillAssigneeSelects();
   renderDashboard();
@@ -382,27 +465,137 @@ function renderAll() {
   renderCompleted();
   renderTemplates();
   renderEmployees();
+  renderControle();
+  renderWorkflow();
+  updateNavBadge();
 }
 
 function renderDashboard() {
   document.getElementById("stat-open").textContent = tasks.filter((t) => t.status === "open").length;
   document.getElementById("stat-pending").textContent = tasks.filter((t) => t.status === "pending").length;
   document.getElementById("stat-done").textContent = tasks.filter((t) => t.status === "afgerond").length;
-  const countsEl = document.getElementById("employee-counts");
-  const openTasks = tasks.filter((t) => t.status !== "afgerond");
-  const groups = new Map();
-  for (const task of openTasks) {
-    const key = task.assigneeId === "ALLEN" ? "ALLEN" : (task.assigneeId || task.assigneeName || "");
-    const label = assigneeLabel(task);
-    const entry = groups.get(key) || { label, open: 0, pending: 0 };
-    if (task.status === "pending") entry.pending += 1;
-    else entry.open += 1;
-    groups.set(key, entry);
+}
+
+function workflowGroup(task) {
+  if (task.assigneeId === "ALLEN" || task.assigneeName === "Allen") {
+    return { key: "ALLEN", label: "Allen" };
   }
-  const items = [...groups.values()].sort((a, b) => a.label.localeCompare(b.label, "nl"));
-  countsEl.innerHTML = items.map((g) =>
-    `<span class="employee-count">${escapeHtml(g.label)}: ${g.open} open / ${g.pending} pending</span>`
-  ).join("");
+  const name = (task.assigneeName || "").trim();
+  if (!name && !task.assigneeId) return { key: "UNASSIGNED", label: "Niet toegewezen" };
+  return { key: name || task.assigneeId, label: name || task.assigneeId };
+}
+
+function periodStart(period) {
+  const now = new Date();
+  if (period === "week") {
+    const mondayOffset = (now.getDay() + 6) % 7;
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset);
+  }
+  if (period === "month") return new Date(now.getFullYear(), now.getMonth(), 1);
+  return null;
+}
+
+function inPeriod(value, start) {
+  if (!start) return true;
+  if (!value) return false;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  return date >= start;
+}
+
+function rejectionTimes(task) {
+  const times = [];
+  if (Array.isArray(task.rejections)) {
+    for (const item of task.rejections) {
+      const at = item && (item.at || item);
+      if (at) times.push(at);
+    }
+  }
+  if (!times.length && task.lastRejectedAt) times.push(task.lastRejectedAt);
+  return times;
+}
+
+function renderWorkflow() {
+  const list = document.getElementById("workflow-list");
+  if (!list) return;
+  const period = document.getElementById("workflow-period").value || "all";
+  const start = periodStart(period);
+  const groups = new Map();
+  const ensure = (key, label) => {
+    if (!groups.has(key)) groups.set(key, { key, label, completed: 0, rejected: 0 });
+    return groups.get(key);
+  };
+  ensure("ALLEN", "Allen");
+  for (const emp of employees.filter((e) => e.active)) {
+    ensure(emp.name || emp.id, emp.name || emp.id);
+  }
+  for (const task of tasks) {
+    const group = ensure(workflowGroup(task).key, workflowGroup(task).label);
+    if (task.status === "afgerond" && inPeriod(task.completedAt, start)) group.completed += 1;
+    for (const at of rejectionTimes(task)) {
+      if (inPeriod(at, start)) group.rejected += 1;
+    }
+  }
+  const items = [...groups.values()].sort((a, b) => {
+    if (a.key === "ALLEN") return -1;
+    if (b.key === "ALLEN") return 1;
+    if (a.key === "UNASSIGNED") return 1;
+    if (b.key === "UNASSIGNED") return -1;
+    return a.label.localeCompare(b.label, "nl");
+  });
+  if (!items.length) {
+    list.innerHTML = '<p class="empty-state">Nog geen workflowgegevens.</p>';
+    return;
+  }
+  list.innerHTML = items.map((g) => `
+    <article class="workflow-card">
+      <h3>${escapeHtml(g.label)}</h3>
+      <div class="workflow-metrics">
+        <div class="workflow-metric">
+          <span class="value">${g.completed}</span>
+          <span class="label">Afgerond</span>
+        </div>
+        <div class="workflow-metric">
+          <span class="value">${g.rejected}</span>
+          <span class="label">Afgekeurd</span>
+        </div>
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderControle() {
+  const list = document.getElementById("controle-list");
+  if (!list) return;
+  const pending = tasks
+    .filter((task) => task.status === "pending")
+    .sort((a, b) => String(b.pendingAt || b.createdAt || "").localeCompare(String(a.pendingAt || a.createdAt || "")));
+  if (!pending.length) {
+    list.innerHTML = '<p class="empty-state">Geen pending taken. Alles is bij.</p>';
+    return;
+  }
+  list.innerHTML = pending.map((task) => `
+    <div class="controle-item">
+      ${taskItemHtml(task)}
+      <div class="controle-actions">
+        <button type="button" class="success" data-approve="${escapeAttr(task.id)}">Goedkeuren</button>
+        <button type="button" class="secondary" data-reject="${escapeAttr(task.id)}">Afwijzen</button>
+      </div>
+    </div>
+  `).join("");
+  bindTaskItems(list);
+  list.querySelectorAll("[data-approve]").forEach((btn) => {
+    btn.onclick = (event) => {
+      event.stopPropagation();
+      approveTask(btn.dataset.approve);
+    };
+  });
+  list.querySelectorAll("[data-reject]").forEach((btn) => {
+    btn.onclick = (event) => {
+      event.stopPropagation();
+      rejectTask(btn.dataset.reject);
+    };
+  });
 }
 
 function isRecurring(task) {
@@ -527,6 +720,7 @@ function renderEmployees() {
       <div class="employee-actions">
         <button type="button" class="secondary" data-rename-emp="${escapeAttr(emp.id)}">Hernoemen</button>
         <button type="button" class="secondary" data-toggle-emp="${escapeAttr(emp.id)}">${emp.active ? "Deactiveren" : "Activeren"}</button>
+        <button type="button" class="danger" data-delete-emp="${escapeAttr(emp.id)}">Verwijderen</button>
       </div>
     </div>
   `).join("");
@@ -535,6 +729,9 @@ function renderEmployees() {
   });
   list.querySelectorAll("[data-toggle-emp]").forEach((btn) => {
     btn.onclick = () => toggleEmployee(btn.dataset.toggleEmp);
+  });
+  list.querySelectorAll("[data-delete-emp]").forEach((btn) => {
+    btn.onclick = () => removeEmployee(btn.dataset.deleteEmp);
   });
 }
 
@@ -575,6 +772,13 @@ async function toggleEmployee(id) {
   const emp = employees.find((e) => e.id === id);
   if (!emp) return;
   await updateDoc(doc(db, "employees", id), { active: !emp.active });
+}
+
+async function removeEmployee(id) {
+  const emp = employees.find((e) => e.id === id);
+  if (!emp) return;
+  if (!confirm(`Medewerker ${emp.name} verwijderen? Bestaande taken blijven bewaard.`)) return;
+  await deleteDoc(doc(db, "employees", id));
 }
 
 function openTask(id) {
@@ -649,10 +853,15 @@ async function approveTask(id) {
 async function rejectTask(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "pending") return;
+  const at = new Date().toISOString();
+  const by = (auth.currentUser && auth.currentUser.email) || "Admin";
   await updateDoc(doc(db, "tasks", id), {
     status: "open",
     pendingAt: null,
-    pendingBy: null
+    pendingBy: null,
+    rejectedCount: increment(1),
+    lastRejectedAt: at,
+    rejections: arrayUnion({ at, by })
   });
 }
 
@@ -717,7 +926,13 @@ async function writeAll(tpls, taskList) {
     const id = task.recurringId && task.occurrenceDate
       ? `${task.recurringId}_${task.occurrenceDate}`
       : (task.id || doc(collection(db, "tasks")).id);
-    await add(doc(db, "tasks", id), serializeTask(task));
+    const payload = serializeTask(task);
+    if (task.rejectedCount || (Array.isArray(task.rejections) && task.rejections.length) || task.lastRejectedAt) {
+      payload.rejectedCount = task.rejectedCount || 0;
+      payload.rejections = Array.isArray(task.rejections) ? task.rejections : [];
+      payload.lastRejectedAt = task.lastRejectedAt || null;
+    }
+    await add(doc(db, "tasks", id), payload);
   }
   await flush();
 }
