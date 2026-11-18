@@ -1,3 +1,12 @@
+// MAINTENANCE LOCKDOWN 2026-11-18
+// Medewerkers-app tijdelijk offline wegens beveiligingsfixes.
+// - Alleen de admin (isAdmin) heeft toegang, zoals voorheen (lezen + schrijven).
+// - Het alleen-lezen account (isReader, zl-assistent-reader) mag tasks en employees lezen.
+// - Al het andere is geweigerd: geen medewerker-login/claim (nameIndex, staffAccounts),
+//   geen pincode-resetverzoeken, geen taak-updates of -aanmaak door medewerkers,
+//   geen meldingen/foto-uploads (reports), geen anonieme reads.
+// Herstel: vorige regels staan in git (commit voor deze lockdown) en in
+// /workspace/outputs/firestore-rules-reader-duedate.txt.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -13,279 +22,41 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == "2xZjAuMgnYUjMg6Mg4ivPhEOIFr2";
     }
 
-    function employeeDoc(employeeId) {
-      return get(/databases/$(database)/documents/employees/$(employeeId));
-    }
-
-    function employeePinVersion(data) {
-      return ("pinVersion" in data && data.pinVersion is int) ? data.pinVersion : 0;
-    }
-
-    function staffAccountPath() {
-      return /databases/$(database)/documents/staffAccounts/$(request.auth.uid);
-    }
-
-    function staffAccount() {
-      return get(staffAccountPath()).data;
-    }
-
-    function staffEmployeeId() {
-      return staffAccount().employeeId;
-    }
-
-    function staffEmployee() {
-      return employeeDoc(staffEmployeeId()).data;
-    }
-
-    function isValidStaff() {
-      return isSignedIn()
-        && exists(staffAccountPath())
-        && staffAccount().employeeId is string
-        && exists(/databases/$(database)/documents/employees/$(staffEmployeeId()))
-        && employeePinVersion(staffEmployee()) == staffAccount().pinVersion;
-    }
-
-    function expectedStaffEmail(employeeId, pinVersion) {
-      return "emp-" + employeeId + "-v" + string(pinVersion) + "@zeiklijst.app";
-    }
-
-    function isActiveTemplate(tpl) {
-      return !("paused" in tpl) || tpl.paused == false;
-    }
-
-    function templateMatches(task, tpl) {
-      return task.title == tpl.title
-        && task.description == tpl.description
-        && task.assigneeId == (("assigneeId" in tpl) ? tpl.assigneeId : "")
-        && task.assigneeName == (("assigneeName" in tpl) ? tpl.assigneeName : "")
-        && (("location" in task) ? task.location : "") == (("location" in tpl) ? tpl.location : "")
-        && task.photos == (("photos" in tpl) ? tpl.photos : []);
-    }
-
-    function isValidOccurrenceId(taskId, data) {
-      return data.recurringId is string
-        && data.occurrenceDate is string
-        && data.occurrenceDate.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-        && taskId == data.recurringId + "_" + data.occurrenceDate;
-    }
-
-    function hasAllowedTaskKeys(data) {
-      return data.keys().hasOnly([
-        "title",
-        "description",
-        "assigneeId",
-        "assigneeName",
-        "status",
-        "createdAt",
-        "pendingAt",
-        "pendingBy",
-        "completedAt",
-        "recurringId",
-        "occurrenceDate",
-        "photos",
-        "location"
-      ]);
-    }
-
-    function isValidRecurringInstance(taskId) {
-      let data = request.resource.data;
-      let recId = data.recurringId;
-      let recPath = /databases/$(database)/documents/recurring/$(recId);
-      return isValidOccurrenceId(taskId, data)
-        && hasAllowedTaskKeys(data)
-        && data.status == "open"
-        && data.title is string
-        && data.description is string
-        && data.assigneeId is string
-        && data.assigneeName is string
-        && data.createdAt is string
-        && (!("pendingAt" in data) || data.pendingAt == null)
-        && (!("pendingBy" in data) || data.pendingBy == null)
-        && (!("completedAt" in data) || data.completedAt == null)
-        && data.photos is list
-        && data.photos.size() <= 4
-        && (!("location" in data) || data.location is string)
-        && exists(recPath)
-        && isActiveTemplate(get(recPath).data)
-        && templateMatches(data, get(recPath).data);
-    }
-
-    function pendingByEmployeeIdCleared() {
-      return !("pendingByEmployeeId" in request.resource.data)
-        || request.resource.data.pendingByEmployeeId == null;
-    }
-
-    function pendingByEmployeeIdOk() {
-      return pendingByEmployeeIdCleared()
-        || request.resource.data.pendingByEmployeeId == staffEmployeeId();
-    }
-
-    function isStatusToggle() {
-      return request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(["status", "pendingAt", "pendingBy", "pendingByEmployeeId"])
-        && (
-          (
-            resource.data.status == "open"
-            && request.resource.data.status == "pending"
-            && request.resource.data.pendingAt is string
-            && request.resource.data.pendingBy == staffEmployee().name
-            && pendingByEmployeeIdOk()
-          )
-          || (
-            resource.data.status == "pending"
-            && request.resource.data.status == "open"
-            && request.resource.data.pendingAt == null
-            && request.resource.data.pendingBy == null
-            && pendingByEmployeeIdCleared()
-          )
-        );
-    }
-
-    function isNullOrMissing(data, key) {
-      return !(key in data) || data[key] == null;
-    }
-
-    function isValidStaffTaskCreate() {
-      let data = request.resource.data;
-      return data.keys().hasOnly([
-          "title",
-          "description",
-          "location",
-          "assigneeId",
-          "assigneeName",
-          "status",
-          "createdAt",
-          "photos",
-          "createdByRole",
-          "createdByEmployeeId",
-          "createdByName",
-          "adminReview",
-          "recurringId",
-          "occurrenceDate",
-          "pendingAt",
-          "pendingBy",
-          "completedAt"
-        ])
-        && data.title is string
-        && data.title.size() >= 1
-        && data.title.size() <= 120
-        && (!("description" in data) || (data.description is string && data.description.size() <= 2000))
-        && (!("location" in data) || (data.location is string && data.location.size() <= 120))
-        && data.assigneeId == staffEmployeeId()
-        && data.assigneeName == staffEmployee().name
-        && data.status == "open"
-        && data.createdAt is string
-        && data.createdAt.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+\\-][0-9]{2}:[0-9]{2})$")
-        && (!("photos" in data) || (data.photos is list && data.photos.size() <= 1))
-        && data.createdByRole == "staff"
-        && data.createdByEmployeeId == staffEmployeeId()
-        && data.createdByName == staffEmployee().name
-        && data.adminReview == "nieuw"
-        && isNullOrMissing(data, "recurringId")
-        && isNullOrMissing(data, "occurrenceDate")
-        && isNullOrMissing(data, "pendingAt")
-        && isNullOrMissing(data, "pendingBy")
-        && isNullOrMissing(data, "completedAt");
-    }
-
     match /tasks/{taskId} {
-      allow read: if isAdmin() || isValidStaff() || isReader();
-      allow create: if isAdmin()
-        || (isValidStaff() && isValidRecurringInstance(taskId))
-        || (isValidStaff() && isValidStaffTaskCreate());
-      allow update: if isAdmin() || (isValidStaff() && isStatusToggle());
-      allow delete: if isAdmin();
+      allow read: if isAdmin() || isReader();
+      allow create, update, delete: if isAdmin();
     }
 
     match /recurring/{recurringId} {
-      allow read: if isAdmin() || isValidStaff();
+      allow read: if isAdmin();
       allow create, update, delete: if isAdmin();
     }
 
     match /employees/{employeeId} {
-      allow read: if isAdmin() || isValidStaff() || isReader();
+      allow read: if isAdmin() || isReader();
       allow create, update, delete: if isAdmin();
     }
 
     match /nameIndex/{nameKey} {
-      allow get: if isSignedIn();
-      allow list: if isAdmin();
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || isStaffHasPinClaim();
-    }
-
-    function isStaffHasPinClaim() {
-      return isSignedIn()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hasPin"])
-        && resource.data.hasPin == false
-        && request.resource.data.hasPin == true
-        && resource.data.employeeId is string
-        && resource.data.pinVersion is int
-        && request.auth.token.email == expectedStaffEmail(resource.data.employeeId, resource.data.pinVersion);
+      allow get, list: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     match /staffAccounts/{uid} {
-      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == uid);
-      allow create: if isAdmin() || isValidStaffAccountCreate(uid);
-      allow update, delete: if isAdmin();
-    }
-
-    function isValidStaffAccountCreate(uid) {
-      let data = request.resource.data;
-      return isSignedIn()
-        && request.auth.uid == uid
-        && data.keys().hasOnly(["employeeId", "pinVersion"])
-        && data.employeeId is string
-        && data.pinVersion is int
-        && exists(/databases/$(database)/documents/employees/$(data.employeeId))
-        && employeePinVersion(employeeDoc(data.employeeId).data) == data.pinVersion
-        && request.auth.token.email == expectedStaffEmail(data.employeeId, data.pinVersion);
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     match /pinResetRequests/{employeeId} {
-      allow read, delete: if isAdmin();
-      allow create: if isSignedIn() && isValidPinResetCreate(employeeId);
-      allow update: if isSignedIn() && isValidPinResetCreate(employeeId);
-    }
-
-    function isValidPinResetCreate(employeeId) {
-      let data = request.resource.data;
-      return data.keys().hasOnly(["employeeId", "name", "requestedAt"])
-        && data.employeeId == employeeId
-        && data.name is string
-        && data.requestedAt == request.time
-        && exists(/databases/$(database)/documents/employees/$(employeeId));
-    }
-
-    function isValidReportCreate() {
-      let data = request.resource.data;
-      return data.keys().hasOnly([
-          "description",
-          "photo",
-          "employeeId",
-          "employeeName",
-          "createdAt",
-          "appVersion",
-          "device",
-          "status"
-        ])
-        && data.description is string
-        && data.description.size() >= 1
-        && data.description.size() <= 1000
-        && (!("photo" in data) || (data.photo is string && data.photo.size() <= 700000))
-        && data.employeeId == staffEmployeeId()
-        && data.employeeName == staffEmployee().name
-        && data.createdAt == request.time
-        && data.appVersion is string
-        && data.appVersion.size() <= 40
-        && data.device is string
-        && data.device.size() <= 300
-        && data.status == "nieuw";
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     match /reports/{reportId} {
-      allow read, update, delete: if isAdmin();
-      allow create: if isValidStaff() && isValidReportCreate();
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
+
+    // Alles wat hierboven niet genoemd is: standaard geweigerd.
   }
 }
