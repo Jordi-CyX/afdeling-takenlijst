@@ -9,6 +9,42 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == "Of3mAU2qJeczN6NDUfkgT73kfJn1";
     }
 
+    function employeeDoc(employeeId) {
+      return get(/databases/$(database)/documents/employees/$(employeeId));
+    }
+
+    function employeePinVersion(data) {
+      return ("pinVersion" in data && data.pinVersion is int) ? data.pinVersion : 0;
+    }
+
+    function staffAccountPath() {
+      return /databases/$(database)/documents/staffAccounts/$(request.auth.uid);
+    }
+
+    function staffAccount() {
+      return get(staffAccountPath()).data;
+    }
+
+    function staffEmployeeId() {
+      return staffAccount().employeeId;
+    }
+
+    function staffEmployee() {
+      return employeeDoc(staffEmployeeId()).data;
+    }
+
+    function isValidStaff() {
+      return isSignedIn()
+        && exists(staffAccountPath())
+        && staffAccount().employeeId is string
+        && exists(/databases/$(database)/documents/employees/$(staffEmployeeId()))
+        && employeePinVersion(staffEmployee()) == staffAccount().pinVersion;
+    }
+
+    function expectedStaffEmail(employeeId, pinVersion) {
+      return "emp-" + employeeId + "-v" + string(pinVersion) + "@zeiklijst.app";
+    }
+
     function isActiveTemplate(tpl) {
       return !("paused" in tpl) || tpl.paused == false;
     }
@@ -70,39 +106,101 @@ service cloud.firestore {
         && templateMatches(data, get(recPath).data);
     }
 
+    function pendingByEmployeeIdCleared() {
+      return !("pendingByEmployeeId" in request.resource.data)
+        || request.resource.data.pendingByEmployeeId == null;
+    }
+
+    function pendingByEmployeeIdOk() {
+      return pendingByEmployeeIdCleared()
+        || request.resource.data.pendingByEmployeeId == staffEmployeeId();
+    }
+
     function isStatusToggle() {
-      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "pendingAt", "pendingBy"])
+      return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["status", "pendingAt", "pendingBy", "pendingByEmployeeId"])
         && (
           (
             resource.data.status == "open"
             && request.resource.data.status == "pending"
             && request.resource.data.pendingAt is string
-            && (!("pendingBy" in request.resource.data) || request.resource.data.pendingBy == null || request.resource.data.pendingBy is string)
+            && request.resource.data.pendingBy == staffEmployee().name
+            && pendingByEmployeeIdOk()
           )
           || (
             resource.data.status == "pending"
             && request.resource.data.status == "open"
             && request.resource.data.pendingAt == null
             && request.resource.data.pendingBy == null
+            && pendingByEmployeeIdCleared()
           )
         );
     }
 
     match /tasks/{taskId} {
-      allow read: if isSignedIn();
-      allow create: if isAdmin() || (isSignedIn() && isValidRecurringInstance(taskId));
-      allow update: if isAdmin() || (isSignedIn() && isStatusToggle());
+      allow read: if isAdmin() || isValidStaff();
+      allow create: if isAdmin() || (isValidStaff() && isValidRecurringInstance(taskId));
+      allow update: if isAdmin() || (isValidStaff() && isStatusToggle());
       allow delete: if isAdmin();
     }
 
     match /recurring/{recurringId} {
-      allow read: if isSignedIn();
+      allow read: if isAdmin() || isValidStaff();
       allow create, update, delete: if isAdmin();
     }
 
     match /employees/{employeeId} {
-      allow read: if isSignedIn();
+      allow read: if isAdmin() || isValidStaff();
       allow create, update, delete: if isAdmin();
+    }
+
+    match /nameIndex/{nameKey} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || isStaffHasPinClaim();
+    }
+
+    function isStaffHasPinClaim() {
+      return isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hasPin"])
+        && resource.data.hasPin == false
+        && request.resource.data.hasPin == true
+        && resource.data.employeeId is string
+        && resource.data.pinVersion is int
+        && request.auth.token.email == expectedStaffEmail(resource.data.employeeId, resource.data.pinVersion);
+    }
+
+    match /staffAccounts/{uid} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == uid);
+      allow create: if isAdmin() || isValidStaffAccountCreate(uid);
+      allow update, delete: if isAdmin();
+    }
+
+    function isValidStaffAccountCreate(uid) {
+      let data = request.resource.data;
+      return isSignedIn()
+        && request.auth.uid == uid
+        && data.keys().hasOnly(["employeeId", "pinVersion"])
+        && data.employeeId is string
+        && data.pinVersion is int
+        && exists(/databases/$(database)/documents/employees/$(data.employeeId))
+        && employeePinVersion(employeeDoc(data.employeeId).data) == data.pinVersion
+        && request.auth.token.email == expectedStaffEmail(data.employeeId, data.pinVersion);
+    }
+
+    match /pinResetRequests/{employeeId} {
+      allow read, delete: if isAdmin();
+      allow create: if isSignedIn() && isValidPinResetCreate(employeeId);
+    }
+
+    function isValidPinResetCreate(employeeId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly(["employeeId", "name", "requestedAt"])
+        && data.employeeId == employeeId
+        && data.name is string
+        && data.requestedAt == request.time
+        && exists(/databases/$(database)/documents/employees/$(employeeId));
     }
   }
 }
