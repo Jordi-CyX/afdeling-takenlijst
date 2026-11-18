@@ -1,4 +1,4 @@
-const CACHE_NAME = "zeiklijst-v3";
+const CACHE_NAME = "zeiklijst-v4";
 const ASSETS = [
   "./",
   "./index.html",
@@ -8,7 +8,8 @@ const ASSETS = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
-  "./fonts/black-ops-one.woff2"
+  "./fonts/black-ops-one.woff2",
+  "./logo.svg"
 ];
 const FONT_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
 

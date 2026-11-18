@@ -168,6 +168,23 @@ section,
   box-shadow: var(--shadow);
 }
 
+
+#dashboard {
+  padding-top: 0;
+  overflow: hidden;
+}
+
+.dashboard-banner {
+  background: #2B2B2B;
+  margin: 0 -1.2rem 1.15rem;
+}
+
+.dashboard-banner img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 h2, h3 {
   margin: 0 0 0.9rem;
   font-size: 1.1rem;
