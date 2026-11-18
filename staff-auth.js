@@ -18,9 +18,9 @@ import {
 import {
   db,
   doc,
-  setDoc,
+  addDoc,
+  collection,
   writeBatch,
-  normalizeName,
   staffPassword,
   startCodeEmail,
   normalizeStartCode,
@@ -28,42 +28,48 @@ import {
   isValidStartCode
 } from "./shared.js";
 
-// Login model (agreed with ZLA, see zl-startcode-model.md):
-// - First PIN / after a reset: name -> nameIndex -> one-time start code from the
-//   admin (startCodes/{CODE}) -> choose PIN -> auth account
-//   startCodeEmail(employeeId, pinVersion, code) -> one claim batch.
-// - Login: name -> nameIndex {employeeId, hasPin, pinVersion, loginKey}
-//   -> startCodeEmail(employeeId, pinVersion, loginKey) + PIN.
-// - No loginKey (account from before start codes) or hasPin false: no sign-in
-//   attempt at all, straight to the start code screen.
-// - A restored session whose staffAccounts doc has no startCode is signed out.
-// - There is no way to claim an account with only a name.
+// Login model: ZLA contract zla-step3-status.md (audit H1/M1/M2).
+// - Claim (first time, new device, after reset): ONLY the start code.
+//   get startCodes/{CODE} -> {employeeId, name, pinVersion} -> choose PIN ->
+//   createUser(startCodeEmail(employeeId, pinVersion, CODE), staffPassword(pin, employeeId))
+//   -> one batch with exactly two writes (staffAccounts set + startCodes update).
+// - The login key (= the code, lowercase) lives ONLY on this device:
+//   localStorage {employeeId, pinVersion, loginKey, name}. Login = PIN only.
+// - No local data -> start code screen. New device / forgotten PIN -> new code.
+// - ZL never reads or writes nameIndex, never lists employees, never reads taskMeta.
 
-const STORAGE_ID = "zeiklijst-staff-id";
-const STORAGE_NAME_KEY = "zeiklijst-staff-name-key";
-const STORAGE_NAME = "zeiklijst-staff-name";
-const STORAGE_PIN_VERSION = "zeiklijst-staff-pin-version";
-const STORAGE_LOGIN_KEY = "zeiklijst-staff-login-key";
+const STORAGE_DEVICE = "zeiklijst-staff-device";
+const LEGACY_KEYS = [
+  "zeiklijst-staff-id",
+  "zeiklijst-staff-name-key",
+  "zeiklijst-staff-name",
+  "zeiklijst-staff-pin-version",
+  "zeiklijst-staff-login-key"
+];
+const STORAGE_PIN_FAILS = "zeiklijst-staff-pin-fails";
+const STORAGE_LAST_RESET = "zeiklijst-staff-last-reset";
 
 const PIN_LENGTH = 6;
+const MAX_PIN_FAILS = 5;
+const RESET_NAME_MAX = 60;
+const RESET_NOTE_MAX = 200;
+const RESET_COOLDOWN_MS = 10 * 60 * 1000;
 
-const MSG_NOT_FOUND = "Medewerker niet gevonden";
 const MSG_INACTIVE = "Je account is niet actief. Neem contact op met je leidinggevende.";
-const MSG_NO_ACCESS = "Je hebt geen toegang. Neem contact op met je leidinggevende.";
-const MSG_ASK_NEW_CODE = "Vraag je leidinggevende om een nieuwe startcode.";
+const MSG_NEEDS_CODE = "Vraag je leidinggevende om een nieuwe startcode.";
 const MSG_CODE_FORMAT = "Een startcode bestaat uit 10 tekens, bijvoorbeeld ABCDE-FGH23.";
-const MSG_CODE_INVALID = "Deze startcode klopt niet. Controleer de code of vraag je leidinggevende om een nieuwe startcode.";
-const MSG_CODE_USED = "Deze startcode is al gebruikt. " + MSG_ASK_NEW_CODE;
-const MSG_CODE_EXPIRED = "Deze startcode is verlopen. " + MSG_ASK_NEW_CODE;
-const MSG_CODE_REPLACED = "Deze startcode is vervangen door een nieuwere. Gebruik de nieuwste code of vraag je leidinggevende om een nieuwe startcode.";
-const MSG_PIN_RESET = "Je pincode is gereset. Vul de nieuwe startcode van je leidinggevende in.";
-const MSG_NEEDS_CODE = "Vraag je leidinggevende om een nieuwe startcode";
+const MSG_CODE_BAD = "Code onbekend, al gebruikt of verlopen. Vraag je leidinggevende om een nieuwe startcode.";
+const MSG_ACCESS_GONE = "Je pincode is gereset of je toegang is veranderd. " + MSG_NEEDS_CODE;
+const MSG_LOCKED = "Te vaak een onjuiste pincode. " + MSG_NEEDS_CODE;
+const MSG_RESET_SENT = "Verzoek verstuurd. Je leidinggevende geeft je persoonlijk een nieuwe startcode.";
+const MSG_OFFLINE = "Geen verbinding. Probeer het opnieuw als je weer online bent.";
 
 let currentStaff = null;
-let pending = null;
+let pending = null; // claim in progress: {employeeId, name, pinVersion, code}
 let hooks = { onLoggedIn: () => {}, onLoggedOut: () => {}, showToast: () => {} };
 let persistenceReady = null;
 let authReady = false;
+let busy = false;
 
 export function getCurrentStaff() {
   return currentStaff;
@@ -71,117 +77,116 @@ export function getCurrentStaff() {
 
 export function setStaffDisplayName(name) {
   const value = String(name || "").trim();
-  if (!currentStaff || !value) return currentStaff;
+  if (!currentStaff || !value || value === currentStaff.name) return currentStaff;
   currentStaff = { ...currentStaff, name: value };
-  persistStaff(currentStaff);
+  saveDevice(currentStaff);
   renderHeaderUser();
   return currentStaff;
 }
+
+// --- Device storage --------------------------------------------------------
 
 function pinVersionOf(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : 0;
 }
 
-function loginKeyOf(value) {
-  return normalizeStartCode(value).toLowerCase();
+function loadDevice() {
+  LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+  try {
+    const d = JSON.parse(localStorage.getItem(STORAGE_DEVICE) || "null");
+    if (!d || typeof d !== "object") return null;
+    const employeeId = String(d.employeeId || "").trim();
+    const loginKey = normalizeStartCode(d.loginKey || "");
+    if (!employeeId || !isValidStartCode(loginKey)) return null;
+    return {
+      employeeId,
+      pinVersion: pinVersionOf(d.pinVersion),
+      loginKey: loginKey.toLowerCase(),
+      name: String(d.name || "").trim().slice(0, RESET_NAME_MAX)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveDevice(staff) {
+  localStorage.setItem(STORAGE_DEVICE, JSON.stringify({
+    employeeId: staff.employeeId,
+    pinVersion: staff.pinVersion,
+    loginKey: staff.loginKey,
+    name: staff.name || ""
+  }));
+}
+
+function clearDevice() {
+  localStorage.removeItem(STORAGE_DEVICE);
+  localStorage.removeItem(STORAGE_PIN_FAILS);
+  LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
 }
 
 function expectedEmail(staff) {
   return startCodeEmail(staff.employeeId, staff.pinVersion, staff.loginKey).toLowerCase();
 }
 
-function storedStaff() {
-  const employeeId = (localStorage.getItem(STORAGE_ID) || "").trim();
-  const nameKey = (localStorage.getItem(STORAGE_NAME_KEY) || "").trim();
-  const name = (localStorage.getItem(STORAGE_NAME) || "").trim();
-  const pinVersion = pinVersionOf(localStorage.getItem(STORAGE_PIN_VERSION));
-  const loginKey = loginKeyOf(localStorage.getItem(STORAGE_LOGIN_KEY));
-  if (!employeeId || !nameKey) return null;
-  return { employeeId, nameKey, name: name || nameKey, pinVersion, loginKey };
+function pinFails() {
+  return Number(localStorage.getItem(STORAGE_PIN_FAILS)) || 0;
 }
 
-function persistStaff(staff) {
-  localStorage.setItem(STORAGE_ID, staff.employeeId);
-  localStorage.setItem(STORAGE_NAME_KEY, staff.nameKey);
-  localStorage.setItem(STORAGE_NAME, staff.name);
-  localStorage.setItem(STORAGE_PIN_VERSION, String(staff.pinVersion));
-  localStorage.setItem(STORAGE_LOGIN_KEY, staff.loginKey || "");
-}
+// --- Errors ----------------------------------------------------------------
 
-function clearStoredStaff() {
-  localStorage.removeItem(STORAGE_ID);
-  localStorage.removeItem(STORAGE_NAME_KEY);
-  localStorage.removeItem(STORAGE_NAME);
-  localStorage.removeItem(STORAGE_PIN_VERSION);
-  localStorage.removeItem(STORAGE_LOGIN_KEY);
+function errCode(err) {
+  return String((err && err.code) || "");
 }
 
 function isOffline(err) {
-  const code = String((err && err.code) || "");
+  const code = errCode(err);
   const message = String((err && err.message) || err || "");
   return (typeof navigator !== "undefined" && navigator.onLine === false)
     || /unavailable|offline|network-request-failed|Failed to get document|network/i.test(`${code} ${message}`);
 }
 
 function isPermission(err) {
-  const code = String((err && err.code) || "");
-  const message = String((err && err.message) || err || "");
-  return /permission-denied/i.test(`${code} ${message}`);
+  return /permission-denied/i.test(`${errCode(err)} ${String((err && err.message) || "")}`);
 }
 
-function lookupErrorMessage(err) {
-  if (isOffline(err)) return "Geen verbinding. Probeer het opnieuw als je weer online bent.";
-  if (isPermission(err)) return "Inloggen is nu niet beschikbaar. Probeer het later opnieuw.";
-  return "Opzoeken is mislukt. Probeer het opnieuw.";
+function isWrongPin(err) {
+  return [
+    "auth/wrong-password",
+    "auth/invalid-credential",
+    "auth/invalid-login-credentials",
+    "auth/user-not-found",
+    "auth/invalid-email"
+  ].includes(errCode(err));
 }
 
-function pinAuthErrorMessage(err) {
-  const code = String((err && err.code) || "");
-  if (code === "auth/too-many-requests") {
-    return "Te veel pogingen. Probeer het later opnieuw.";
+function genericError(err, what) {
+  if (isOffline(err)) return MSG_OFFLINE;
+  if (errCode(err) === "auth/too-many-requests") return "Te veel pogingen. Probeer het later opnieuw.";
+  if (errCode(err) === "auth/operation-not-allowed" || isPermission(err)) {
+    return "Dit is nu niet beschikbaar. Probeer het later opnieuw.";
   }
-  if (
-    code === "auth/wrong-password"
-    || code === "auth/invalid-credential"
-    || code === "auth/invalid-login-credentials"
-    || code === "auth/user-not-found"
-    || code === "auth/invalid-email"
-  ) {
-    return "Onjuiste pincode";
-  }
-  if (isOffline(err)) return "Geen verbinding. Probeer het opnieuw als je weer online bent.";
-  if (code === "auth/operation-not-allowed" || isPermission(err)) {
-    return "Inloggen is nu niet beschikbaar. Probeer het later opnieuw.";
-  }
-  return "Inloggen is mislukt. Probeer het opnieuw.";
+  return `${what} is mislukt. Probeer het opnieuw.`;
 }
 
-function writeErrorMessage(err) {
-  if (isOffline(err)) return "Geen verbinding. Probeer het opnieuw als je weer online bent.";
-  if (isPermission(err)) return "Versturen is nu niet beschikbaar. Probeer het later opnieuw.";
-  return "Versturen is mislukt. Probeer het opnieuw.";
-}
+// --- DOM -------------------------------------------------------------------
 
 function $(id) {
   return document.getElementById(id);
 }
 
-function setError(id, message) {
+function setText(id, message) {
   const el = $(id);
   if (!el) return;
   el.textContent = message || "";
   el.classList.toggle("hidden", !message);
 }
 
-function setNotice(id, message) {
-  setError(id, message);
-}
-
-function setBusy(form, busy) {
+function setBusy(form, value) {
+  busy = Boolean(value);
   if (!form) return;
-  form.querySelectorAll("button, input").forEach((el) => {
-    el.disabled = Boolean(busy);
+  form.querySelectorAll("button, input, textarea").forEach((el) => {
+    el.disabled = Boolean(value);
   });
 }
 
@@ -211,11 +216,13 @@ function weakPin(value) {
 }
 
 const LOGIN_STEPS = {
-  name: "staff-name-form",
   code: "staff-code-form",
   setup: "staff-pin-setup-form",
-  pin: "staff-pin-form"
+  pin: "staff-pin-form",
+  reset: "staff-reset-form"
 };
+const ERROR_IDS = ["staff-code-error", "staff-pin-setup-error", "staff-pin-error", "staff-reset-error"];
+const NOTICE_IDS = { code: "staff-code-notice", pin: "staff-pin-notice", reset: "staff-reset-notice" };
 
 function showStep(step, options = {}) {
   const login = $("staff-login");
@@ -227,40 +234,61 @@ function showStep(step, options = {}) {
     const form = $(id);
     if (form) form.classList.toggle("hidden", key !== step);
   });
-  ["staff-name-error", "staff-code-error", "staff-pin-setup-error", "staff-pin-error"].forEach((id) => setError(id, ""));
-  setNotice("staff-login-notice", step === "name" ? options.notice || "" : "");
-  setNotice("staff-pin-notice", step === "pin" ? options.notice || "" : "");
-  setNotice("staff-code-notice", step === "code" ? options.notice || "" : "");
+  ERROR_IDS.forEach((id) => setText(id, ""));
+  Object.entries(NOTICE_IDS).forEach(([key, id]) => setText(id, key === step ? options.notice || "" : ""));
+  ["staff-pin-new", "staff-pin-confirm", "staff-pin-input"].forEach((id) => {
+    const el = $(id);
+    if (el) el.value = "";
+  });
+  const device = loadDevice();
   if (step === "code") {
     const codeInput = $("staff-code-input");
     if (codeInput) codeInput.value = "";
+    const back = $("staff-code-back");
+    if (back) back.classList.toggle("hidden", !device);
   }
-  const hello = $("staff-pin-hello");
-  if (hello) {
-    hello.textContent = pending && pending.name
-      ? `Hoi ${pending.name}, vul je pincode in.`
-      : "Vul je pincode in.";
+  if (step === "pin") {
+    const hello = $("staff-pin-hello");
+    if (hello) hello.textContent = device && device.name ? `Hoi ${device.name}, vul je pincode in.` : "Vul je pincode in.";
   }
-  const codeHello = $("staff-code-hello");
-  if (codeHello) {
-    codeHello.textContent = pending && pending.name
-      ? `Hoi ${pending.name}, vul de startcode in die je van je leidinggevende hebt gekregen.`
-      : "Vul de startcode in die je van je leidinggevende hebt gekregen.";
+  if (step === "setup") {
+    const hello = $("staff-setup-hello");
+    if (hello) {
+      hello.textContent = pending && pending.name
+        ? `Hoi ${pending.name}, kies een pincode van ${PIN_LENGTH} cijfers. Gebruik geen makkelijke reeks zoals 123456 of 111111.`
+        : `Kies een pincode van ${PIN_LENGTH} cijfers. Gebruik geen makkelijke reeks zoals 123456 of 111111.`;
+    }
   }
+  if (step === "reset") {
+    const nameInput = $("staff-reset-name");
+    if (nameInput && !nameInput.value) nameInput.value = device && device.name ? device.name : "";
+    const note = $("staff-reset-note");
+    if (note) note.value = "";
+    const form = $("staff-reset-form");
+    if (form) form.querySelectorAll("button, input, textarea").forEach((el) => { el.disabled = false; });
+  }
+  // Hidden username field so password managers file the PIN under the right person.
   ["staff-setup-username", "staff-pin-username"].forEach((id) => {
     const el = $(id);
-    if (el) el.value = pending && pending.name ? pending.name : "";
+    if (!el) return;
+    const name = step === "setup" ? (pending && pending.name) : (device && device.name);
+    el.value = name || "";
   });
-  const focusId = {
-    name: "staff-name-input",
+  const focusEl = $({
     code: "staff-code-input",
     setup: "staff-pin-new",
-    pin: "staff-pin-input"
-  }[step];
-  const focusEl = $(focusId);
+    pin: "staff-pin-input",
+    reset: "staff-reset-name"
+  }[step]);
   if (focusEl) {
     try { focusEl.focus(); } catch { /* ignore */ }
   }
+}
+
+// The normal login screen for this device: PIN if it has a login key, else start code.
+function showLoginStart(notice) {
+  if (loadDevice()) showStep("pin", { notice });
+  else showStep("code", { notice: notice || MSG_NEEDS_CODE });
 }
 
 function hideLogin() {
@@ -276,7 +304,6 @@ function renderHeaderUser() {
   const name = currentStaff && currentStaff.name ? currentStaff.name : "";
   const header = $("header-user");
   const menu = $("menu-user");
-  const logoutBtn = $("logout-menu-btn");
   if (header) {
     header.textContent = name;
     header.classList.toggle("hidden", !name);
@@ -286,19 +313,13 @@ function renderHeaderUser() {
     menu.textContent = name ? `Ingelogd als ${name}` : "";
     menu.classList.toggle("hidden", !name);
   }
-  if (logoutBtn) logoutBtn.classList.toggle("hidden", !name);
-  const reportBtn = $("report-menu-btn");
-  if (reportBtn) reportBtn.classList.toggle("hidden", !name);
+  ["logout-menu-btn", "report-menu-btn"].forEach((id) => {
+    const btn = $(id);
+    if (btn) btn.classList.toggle("hidden", !currentStaff);
+  });
 }
 
-function acceptStaff(staff) {
-  currentStaff = staff;
-  persistStaff(staff);
-  pending = null;
-  renderHeaderUser();
-  hideLogin();
-  hooks.onLoggedIn(staff);
-}
+// --- Firebase helpers ------------------------------------------------------
 
 async function ensurePersistence() {
   if (!persistenceReady) {
@@ -310,25 +331,9 @@ async function ensurePersistence() {
 async function ensureAnonymous() {
   await ensurePersistence();
   if (auth.currentUser && auth.currentUser.isAnonymous) return auth.currentUser;
-  if (auth.currentUser && !auth.currentUser.isAnonymous) {
-    await signOut(auth);
-  }
+  if (auth.currentUser) await signOut(auth);
   const cred = await signInAnonymously(auth);
   return cred.user;
-}
-
-async function readNameIndex(nameKey) {
-  const snap = await getDoc(doc(db, "nameIndex", nameKey));
-  if (!snap.exists()) return null;
-  const data = snap.data() || {};
-  const employeeId = String(data.employeeId || "").trim();
-  if (!employeeId) return null;
-  return {
-    employeeId,
-    hasPin: data.hasPin === true,
-    pinVersion: pinVersionOf(data.pinVersion),
-    loginKey: loginKeyOf(data.loginKey)
-  };
 }
 
 function millisOf(value) {
@@ -338,418 +343,365 @@ function millisOf(value) {
   return new Date(value).getTime();
 }
 
-// Reads employees/{id} with the signed-in staff account.
-// Returns { ok: true, name } or { ok: false, message }.
-async function checkEmployeeActive(staff) {
+// Own employees/{id} doc only (contract §3). Never a list.
+// -> { ok: true, name } | { ok: false, reason: "inactive" | "denied" | "error", message }
+async function checkOwnEmployee(staff) {
   try {
     const snap = await getDoc(doc(db, "employees", staff.employeeId));
-    if (!snap.exists()) return { ok: false, message: MSG_NOT_FOUND };
+    if (!snap.exists()) return { ok: false, reason: "denied", message: MSG_ACCESS_GONE };
     const data = snap.data() || {};
-    if (data.active === false) return { ok: false, message: MSG_INACTIVE };
+    if (data.active === false) return { ok: false, reason: "inactive", message: MSG_INACTIVE };
     return { ok: true, name: String(data.name || "").trim() };
   } catch (err) {
-    // Offline: keep the (already authenticated) session; the rules still
-    // refuse all data for inactive staff once the phone is online again.
-    if (isOffline(err) && !isPermission(err)) return { ok: true, name: "" };
-    if (isPermission(err)) return { ok: false, message: MSG_NO_ACCESS };
-    return { ok: false, message: lookupErrorMessage(err) };
+    if (isPermission(err)) return { ok: false, reason: "denied", message: MSG_ACCESS_GONE };
+    // Offline: keep the authenticated session; the rules still refuse all data
+    // for a reset or inactive account as soon as the phone is online again.
+    if (isOffline(err)) return { ok: true, name: "" };
+    return { ok: false, reason: "error", message: genericError(err, "Inloggen") };
   }
 }
 
-async function refuseSession(message) {
-  currentStaff = null;
+function acceptStaff(staff) {
+  currentStaff = staff;
+  saveDevice(staff);
+  localStorage.removeItem(STORAGE_PIN_FAILS);
   pending = null;
-  clearStoredStaff();
+  renderHeaderUser();
+  hideLogin();
+  hooks.onLoggedIn(staff);
+}
+
+// After a successful sign-in: own employee doc decides.
+async function finishSession(staff) {
+  const check = await checkOwnEmployee(staff);
+  if (check.ok) {
+    if (check.name) staff.name = check.name;
+    acceptStaff(staff);
+    return true;
+  }
+  currentStaff = null;
   renderHeaderUser();
   await signOut(auth).catch(() => {});
-  showStep("name", { notice: message });
+  if (check.reason === "denied") {
+    // PIN reset (pinVersion bumped) or account no longer valid: this device's key is useless.
+    clearDevice();
+    showStep("code", { notice: check.message });
+  } else if (check.reason === "inactive") {
+    showLoginStart(check.message);
+  } else {
+    showLoginStart(check.message);
+  }
+  return false;
 }
 
-async function finishStaffSession(staff) {
-  const check = await checkEmployeeActive(staff);
-  if (!check.ok) {
-    await refuseSession(check.message);
-    return false;
-  }
-  if (check.name) staff.name = check.name;
-  acceptStaff(staff);
-  return true;
-}
-
-async function verifyExistingSession(user) {
-  const stored = storedStaff();
-  if (!stored) {
-    await signOut(auth).catch(() => {});
-    return false;
-  }
-  let index;
-  try {
-    index = await readNameIndex(stored.nameKey);
-  } catch (err) {
-    if (isOffline(err) && !isPermission(err)) {
-      // Offline start: keep the stored session (cached data only).
-      acceptStaff(stored);
-      return true;
-    }
-    await refuseSession(isPermission(err) ? MSG_NO_ACCESS : lookupErrorMessage(err));
-    return "refused";
-  }
-  if (!index || index.employeeId !== stored.employeeId) {
-    await refuseSession("");
-    return "refused";
-  }
-  const staff = { ...stored, pinVersion: index.pinVersion, loginKey: index.loginKey };
+async function restoreSession(user) {
+  const device = loadDevice();
   const email = String((user && user.email) || "").toLowerCase();
-  if (!index.hasPin || !index.loginKey || email !== expectedEmail(staff)) {
-    // PIN was reset: a new start code is needed.
+  if (!device || email !== expectedEmail(device)) {
     await signOut(auth).catch(() => {});
-    clearStoredStaff();
-    pending = {
-      employeeId: index.employeeId,
-      nameKey: stored.nameKey,
-      name: stored.name,
-      pinVersion: index.pinVersion,
-      hasPin: index.hasPin,
-      loginKey: index.loginKey,
-      startCode: ""
-    };
-    showStep("code", { notice: index.loginKey ? MSG_PIN_RESET : MSG_NEEDS_CODE });
-    return "setup";
+    return false;
   }
-  // Only accounts created with a start code are accepted (option A).
-  try {
-    const account = await getDoc(doc(db, "staffAccounts", user.uid));
-    const data = account.exists() ? account.data() || {} : {};
-    if (!account.exists() || !isValidStartCode(data.startCode) || data.employeeId !== staff.employeeId) {
-      await refuseSession(MSG_NEEDS_CODE);
-      return "refused";
-    }
-  } catch (err) {
-    if (!(isOffline(err) && !isPermission(err))) {
-      await refuseSession(isPermission(err) ? MSG_NO_ACCESS : lookupErrorMessage(err));
-      return "refused";
-    }
-  }
-  const ok = await finishStaffSession(staff);
-  return ok ? true : "refused";
+  return finishSession({ ...device });
 }
 
-function goBackToName() {
-  pending = null;
-  ["staff-pin-new", "staff-pin-confirm", "staff-pin-input", "staff-code-input"].forEach((id) => {
-    const el = $(id);
-    if (el) el.value = "";
-  });
-  showStep("name");
-}
-
-async function onNameSubmit(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const input = $("staff-name-input");
-  const typed = (input && input.value || "").trim();
-  setError("staff-name-error", "");
-  setNotice("staff-login-notice", "");
-  if (!typed) {
-    setError("staff-name-error", "Vul je naam in.");
-    return;
-  }
-  const nameKey = normalizeName(typed);
-  if (!nameKey) {
-    setError("staff-name-error", MSG_NOT_FOUND);
-    return;
-  }
-  setBusy(form, true);
-  try {
-    await ensureAnonymous();
-    const index = await readNameIndex(nameKey);
-    if (!index) {
-      setError("staff-name-error", MSG_NOT_FOUND);
-      return;
-    }
-    pending = {
-      employeeId: index.employeeId,
-      nameKey,
-      name: typed,
-      pinVersion: index.pinVersion,
-      hasPin: index.hasPin,
-      loginKey: index.loginKey,
-      startCode: ""
-    };
-    // No sign-in attempt without a start-code account: straight to the code screen.
-    if (index.hasPin && index.loginKey) showStep("pin");
-    else showStep("code", { notice: MSG_NEEDS_CODE });
-  } catch (err) {
-    setError("staff-name-error", lookupErrorMessage(err));
-  } finally {
-    setBusy(form, false);
-  }
-}
+// --- Claim -----------------------------------------------------------------
 
 async function onCodeSubmit(event) {
   event.preventDefault();
+  if (busy) return;
   const form = event.currentTarget;
-  setError("staff-code-error", "");
-  if (!pending) {
-    showStep("name");
-    return;
-  }
+  setText("staff-code-error", "");
   const code = normalizeStartCode(($("staff-code-input") && $("staff-code-input").value) || "");
   if (!isValidStartCode(code)) {
-    setError("staff-code-error", MSG_CODE_FORMAT);
+    setText("staff-code-error", MSG_CODE_FORMAT);
     return;
   }
   setBusy(form, true);
   try {
     await ensureAnonymous();
-    const snap = await getDoc(doc(db, "startCodes", code));
-    if (!snap.exists()) {
-      setError("staff-code-error", MSG_CODE_INVALID);
+    let snap;
+    try {
+      snap = await getDoc(doc(db, "startCodes", code));
+    } catch (err) {
+      if (isPermission(err)) {
+        // Unknown, used and expired all look the same (rules refuse the get).
+        setText("staff-code-error", MSG_CODE_BAD);
+        return;
+      }
+      throw err;
+    }
+    const data = snap.exists() ? snap.data() || {} : null;
+    const expires = data ? millisOf(data.expiresAt) : NaN;
+    const employeeId = data ? String(data.employeeId || "").trim() : "";
+    if (!data || !employeeId || data.used !== false || !Number.isFinite(expires) || expires <= Date.now()) {
+      setText("staff-code-error", MSG_CODE_BAD);
       return;
     }
-    const data = snap.data() || {};
-    if (String(data.employeeId || "") !== pending.employeeId) {
-      // Do not reveal that the code belongs to someone else.
-      setError("staff-code-error", MSG_CODE_INVALID);
-      return;
-    }
-    if (data.used === true) {
-      setError("staff-code-error", MSG_CODE_USED);
-      return;
-    }
-    const expires = millisOf(data.expiresAt);
-    if (!Number.isFinite(expires) || expires <= Date.now()) {
-      setError("staff-code-error", MSG_CODE_EXPIRED);
-      return;
-    }
-    if (pinVersionOf(data.pinVersion) !== pending.pinVersion) {
-      setError("staff-code-error", MSG_CODE_REPLACED);
-      return;
-    }
-    pending.startCode = code;
+    pending = {
+      employeeId,
+      name: String(data.name || "").trim().slice(0, RESET_NAME_MAX),
+      pinVersion: pinVersionOf(data.pinVersion),
+      code
+    };
+    setBusy(form, false);
     showStep("setup");
   } catch (err) {
-    setError("staff-code-error", lookupErrorMessage(err));
+    setText("staff-code-error", genericError(err, "Controleren"));
   } finally {
     setBusy(form, false);
   }
 }
 
-// One batch; the rules check code, employee, pinVersion, active and token email.
-async function claimStartCode(user, staff, code) {
+// Exactly two writes (contract §2.6). No nameIndex, no loginKey in the database.
+async function claimBatch(uid, claim) {
   const batch = writeBatch(db);
-  batch.set(doc(db, "staffAccounts", user.uid), {
-    employeeId: staff.employeeId,
-    pinVersion: staff.pinVersion,
-    startCode: code
+  batch.set(doc(db, "staffAccounts", uid), {
+    employeeId: claim.employeeId,
+    pinVersion: claim.pinVersion,
+    startCode: claim.code
   });
-  batch.update(doc(db, "startCodes", code), {
+  batch.update(doc(db, "startCodes", claim.code), {
     used: true,
-    usedBy: user.uid,
+    usedBy: uid,
     usedAt: serverTimestamp()
-  });
-  batch.update(doc(db, "nameIndex", staff.nameKey), {
-    hasPin: true,
-    loginKey: code.toLowerCase()
   });
   await batch.commit();
 }
 
+async function staffAccountExists(uid) {
+  try {
+    const snap = await getDoc(doc(db, "staffAccounts", uid));
+    return snap.exists();
+  } catch {
+    return false;
+  }
+}
+
 async function onPinSetupSubmit(event) {
   event.preventDefault();
+  if (busy) return;
   const form = event.currentTarget;
   const pin = ($("staff-pin-new") && $("staff-pin-new").value) || "";
   const confirm = ($("staff-pin-confirm") && $("staff-pin-confirm").value) || "";
-  setError("staff-pin-setup-error", "");
-  if (!pending) {
-    showStep("name");
-    return;
-  }
-  if (!pending.startCode || !isValidStartCode(pending.startCode)) {
+  setText("staff-pin-setup-error", "");
+  if (!pending || !isValidStartCode(pending.code)) {
     showStep("code");
     return;
   }
   if (!validPin(pin) || !validPin(confirm)) {
-    setError("staff-pin-setup-error", `Kies een pincode van ${PIN_LENGTH} cijfers.`);
+    setText("staff-pin-setup-error", `Kies een pincode van ${PIN_LENGTH} cijfers.`);
     return;
   }
   if (pin !== confirm) {
-    setError("staff-pin-setup-error", "Pincodes komen niet overeen.");
+    setText("staff-pin-setup-error", "Pincodes komen niet overeen.");
     return;
   }
   if (weakPin(pin)) {
-    setError("staff-pin-setup-error", "Deze pincode is te makkelijk te raden. Kies een andere.");
+    setText("staff-pin-setup-error", "Deze pincode is te makkelijk te raden. Kies een andere.");
     return;
   }
   setBusy(form, true);
-  const code = pending.startCode;
-  const staff = {
-    employeeId: pending.employeeId,
-    nameKey: pending.nameKey,
-    name: pending.name,
-    pinVersion: pending.pinVersion,
-    loginKey: code.toLowerCase()
-  };
-  const email = startCodeEmail(staff.employeeId, staff.pinVersion, code);
-  const password = staffPassword(pin, staff.employeeId);
+  const claim = { ...pending };
+  const email = startCodeEmail(claim.employeeId, claim.pinVersion, claim.code);
+  const password = staffPassword(pin, claim.employeeId);
   let user = null;
+  let alreadyClaimed = false;
   try {
     await ensurePersistence();
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
-      user = cred.user;
+      user = (await createUserWithEmailAndPassword(auth, email, password)).user;
     } catch (err) {
-      if (!(err && err.code === "auth/email-already-in-use")) throw err;
-      // An earlier attempt with this code created the account but the claim
-      // did not save. Only the same PIN can resume it.
+      if (errCode(err) !== "auth/email-already-in-use") throw err;
+      // An earlier attempt with this code created the account but the batch did
+      // not save. Resume with the same credentials; never create a second user.
       try {
-        const cred = await signInWithEmailAndPassword(auth, email, password);
-        user = cred.user;
+        user = (await signInWithEmailAndPassword(auth, email, password)).user;
       } catch (signInErr) {
         if (isOffline(signInErr)) throw signInErr;
-        setError("staff-pin-setup-error", MSG_CODE_USED);
+        setText("staff-pin-setup-error", "Met deze startcode is al een pincode ingesteld. Gebruik dezelfde pincode als de vorige keer, of " + MSG_NEEDS_CODE.charAt(0).toLowerCase() + MSG_NEEDS_CODE.slice(1));
         setBusy(form, false);
         return;
       }
+      alreadyClaimed = await staffAccountExists(user.uid);
     }
   } catch (err) {
-    setError("staff-pin-setup-error", pinAuthErrorMessage(err));
+    setText("staff-pin-setup-error", genericError(err, "Pincode instellen"));
     setBusy(form, false);
     return;
   }
-  try {
-    await claimStartCode(user, staff, code);
-  } catch (err) {
-    // Remove the just-created auth account so no orphan stays behind. If that
-    // fails, a retry with the same PIN signs in to it (email-already-in-use)
-    // and repeats the batch; a second user is never created.
-    await deleteUser(user).catch(() => {});
-    await signOut(auth).catch(() => {});
-    if (isPermission(err)) {
-      setError(
+  if (!alreadyClaimed) {
+    try {
+      await claimBatch(user.uid, claim);
+    } catch (err) {
+      // Remove the just-created auth account so no orphan stays behind. If that
+      // fails, a retry with the same PIN signs in to it and repeats the batch.
+      await deleteUser(user).catch(() => {});
+      await signOut(auth).catch(() => {});
+      setText(
         "staff-pin-setup-error",
-        "Pincode instellen is niet gelukt. De startcode is niet meer geldig of je account is niet actief. Neem contact op met je leidinggevende."
+        isPermission(err)
+          ? "Pincode instellen is niet gelukt. De startcode is niet meer geldig of je account is niet actief. " + MSG_NEEDS_CODE
+          : `${isOffline(err) ? "Geen verbinding." : "Opslaan is mislukt."} Probeer het opnieuw met dezelfde pincode.`
       );
-    } else {
-      setError(
-        "staff-pin-setup-error",
-        `${isOffline(err) ? "Geen verbinding." : "Opslaan is mislukt."} Probeer het opnieuw met dezelfde pincode.`
-      );
+      setBusy(form, false);
+      return;
     }
-    setBusy(form, false);
-    return;
   }
+  const staff = {
+    employeeId: claim.employeeId,
+    pinVersion: claim.pinVersion,
+    loginKey: claim.code.toLowerCase(),
+    name: claim.name
+  };
+  // The key lives only on this device from now on (replaces any earlier employee here).
+  saveDevice(staff);
+  localStorage.removeItem(STORAGE_PIN_FAILS);
   try {
-    await finishStaffSession(staff);
+    await finishSession(staff);
   } finally {
     setBusy(form, false);
   }
 }
 
+// --- PIN login -------------------------------------------------------------
+
 async function onPinSubmit(event) {
   event.preventDefault();
+  if (busy) return;
   const form = event.currentTarget;
   const pin = ($("staff-pin-input") && $("staff-pin-input").value) || "";
-  setError("staff-pin-error", "");
-  setNotice("staff-pin-notice", "");
-  if (!pending) {
-    showStep("name");
-    return;
-  }
-  if (!pending.loginKey) {
+  setText("staff-pin-error", "");
+  setText("staff-pin-notice", "");
+  const device = loadDevice();
+  if (!device) {
     showStep("code", { notice: MSG_NEEDS_CODE });
     return;
   }
   if (!validPin(pin)) {
-    setError("staff-pin-error", `Vul je pincode van ${PIN_LENGTH} cijfers in.`);
+    setText("staff-pin-error", `Vul je pincode van ${PIN_LENGTH} cijfers in.`);
     return;
   }
   setBusy(form, true);
   try {
     await ensurePersistence();
-    const staff = {
-      employeeId: pending.employeeId,
-      nameKey: pending.nameKey,
-      name: pending.name,
-      pinVersion: pending.pinVersion,
-      loginKey: pending.loginKey
-    };
-    await signInWithEmailAndPassword(auth, expectedEmail(staff), staffPassword(pin, staff.employeeId));
-    await finishStaffSession(staff);
+    if (auth.currentUser) await signOut(auth).catch(() => {});
+    await signInWithEmailAndPassword(auth, expectedEmail(device), staffPassword(pin, device.employeeId));
+    localStorage.removeItem(STORAGE_PIN_FAILS);
+    setBusy(form, false);
+    await finishSession({ ...device });
   } catch (err) {
-    setError("staff-pin-error", pinAuthErrorMessage(err));
+    if (isWrongPin(err)) {
+      const fails = pinFails() + 1;
+      if (fails >= MAX_PIN_FAILS) {
+        // Lockout: this device's login key is dropped; only a new start code helps.
+        clearDevice();
+        setBusy(form, false);
+        showStep("code", { notice: MSG_LOCKED });
+        return;
+      }
+      localStorage.setItem(STORAGE_PIN_FAILS, String(fails));
+      const left = MAX_PIN_FAILS - fails;
+      setText("staff-pin-error", `Onjuiste pincode. Nog ${left} ${left === 1 ? "poging" : "pogingen"}.`);
+    } else {
+      setText("staff-pin-error", genericError(err, "Inloggen"));
+    }
   } finally {
     setBusy(form, false);
   }
 }
 
-// A reset request only notifies the admin. It gives no access: the employee
-// can only set a new PIN with a new start code from the admin.
-async function onForgotPin() {
-  if (!pending) {
-    showStep("name");
+// --- Forgot PIN (contract §4) ---------------------------------------------
+// Only notifies the admin; gives no access. Random id (addDoc), create-only.
+
+async function onResetSubmit(event) {
+  event.preventDefault();
+  if (busy) return;
+  const form = event.currentTarget;
+  setText("staff-reset-error", "");
+  setText("staff-reset-notice", "");
+  const name = (($("staff-reset-name") && $("staff-reset-name").value) || "").trim();
+  const note = (($("staff-reset-note") && $("staff-reset-note").value) || "").trim();
+  if (!name) {
+    setText("staff-reset-error", "Vul je naam in.");
     return;
   }
-  const btn = $("staff-pin-forgot");
-  if (btn) btn.disabled = true;
-  setError("staff-pin-error", "");
-  setNotice("staff-pin-notice", "");
+  if (name.length > RESET_NAME_MAX) {
+    setText("staff-reset-error", `Je naam mag maximaal ${RESET_NAME_MAX} tekens zijn.`);
+    return;
+  }
+  if (note.length > RESET_NOTE_MAX) {
+    setText("staff-reset-error", `De toelichting mag maximaal ${RESET_NOTE_MAX} tekens zijn.`);
+    return;
+  }
+  const last = Number(localStorage.getItem(STORAGE_LAST_RESET)) || 0;
+  if (Date.now() - last < RESET_COOLDOWN_MS) {
+    setText("staff-reset-notice", `Je verzoek is al verstuurd. ${MSG_RESET_SENT.replace("Verzoek verstuurd. ", "")}`);
+    return;
+  }
+  setBusy(form, true);
+  let sent = false;
   try {
     await ensureAnonymous();
-    await setDoc(doc(db, "pinResetRequests", pending.employeeId), {
-      employeeId: pending.employeeId,
-      name: pending.name,
-      requestedAt: serverTimestamp()
-    });
-    setNotice("staff-pin-notice", `Verzoek verstuurd. ${MSG_ASK_NEW_CODE}`);
-    hooks.showToast(`Verzoek verstuurd. ${MSG_ASK_NEW_CODE}`, "success");
+    const payload = { name, requestedAt: serverTimestamp() };
+    if (note) payload.note = note;
+    await addDoc(collection(db, "pinResetRequests"), payload);
+    localStorage.setItem(STORAGE_LAST_RESET, String(Date.now()));
+    sent = true;
+    setText("staff-reset-notice", MSG_RESET_SENT);
+    hooks.showToast(MSG_RESET_SENT, "success");
   } catch (err) {
-    const message = writeErrorMessage(err);
-    setError("staff-pin-error", message);
+    const message = genericError(err, "Versturen");
+    setText("staff-reset-error", message);
     hooks.showToast(message, "error");
   } finally {
-    if (btn) btn.disabled = false;
+    setBusy(form, false);
+    if (sent) {
+      const submit = form.querySelector("button[type=submit]");
+      if (submit) submit.disabled = true;
+    }
   }
 }
 
+// --- Logout ----------------------------------------------------------------
+
+// Logging out keeps this device's login key, so the next login is PIN only.
+// "Andere startcode gebruiken" on the PIN screen replaces it with a new claim.
 export async function logoutStaff(message) {
   const hadStaff = Boolean(currentStaff);
   currentStaff = null;
   pending = null;
-  clearStoredStaff();
   renderHeaderUser();
   try {
     await signOut(auth);
   } catch {
     // Still return to the login screen.
   }
-  showStep("name", { notice: typeof message === "string" ? message : "" });
+  showLoginStart(typeof message === "string" ? message : "");
   if (hadStaff) hooks.onLoggedOut();
 }
 
 function bindUi() {
-  const nameForm = $("staff-name-form");
-  const codeForm = $("staff-code-form");
-  const setupForm = $("staff-pin-setup-form");
-  const pinForm = $("staff-pin-form");
-  if (nameForm) nameForm.addEventListener("submit", onNameSubmit);
-  if (codeForm) codeForm.addEventListener("submit", onCodeSubmit);
-  if (setupForm) setupForm.addEventListener("submit", onPinSetupSubmit);
-  if (pinForm) pinForm.addEventListener("submit", onPinSubmit);
-  const forgot = $("staff-pin-forgot");
-  if (forgot) forgot.addEventListener("click", onForgotPin);
-  ["staff-pin-back", "staff-setup-back", "staff-code-back"].forEach((id) => {
-    const btn = $(id);
-    if (btn) btn.addEventListener("click", goBackToName);
-  });
+  const on = (id, type, fn) => {
+    const el = $(id);
+    if (el) el.addEventListener(type, fn);
+  };
+  on("staff-code-form", "submit", onCodeSubmit);
+  on("staff-pin-setup-form", "submit", onPinSetupSubmit);
+  on("staff-pin-form", "submit", onPinSubmit);
+  on("staff-reset-form", "submit", onResetSubmit);
+  on("staff-pin-forgot", "click", () => showStep("reset"));
+  on("staff-code-forgot", "click", () => showStep("reset"));
+  on("staff-pin-other", "click", () => { pending = null; showStep("code", { notice: "Vul de startcode in die je van je leidinggevende hebt gekregen. Daarmee wordt dit toestel aan jou gekoppeld." }); });
+  on("staff-code-back", "click", () => { pending = null; showLoginStart(); });
+  on("staff-setup-back", "click", () => { pending = null; showStep("code"); });
+  on("staff-reset-back", "click", () => showLoginStart());
   ["staff-pin-new", "staff-pin-confirm", "staff-pin-input"].forEach((id) => {
     const input = $(id);
     if (input) digitsOnly(input);
   });
   const codeInput = $("staff-code-input");
   if (codeInput) startCodeInput(codeInput);
-  const logoutBtn = $("logout-menu-btn");
-  if (logoutBtn) logoutBtn.addEventListener("click", () => { logoutStaff(); });
+  on("logout-menu-btn", "click", () => { logoutStaff(); });
 }
 
 export function initStaffAuth(options) {
@@ -760,19 +712,19 @@ export function initStaffAuth(options) {
   };
   bindUi();
   renderHeaderUser();
-
   ensurePersistence();
   onAuthStateChanged(auth, async (user) => {
     if (authReady) return;
     authReady = true;
     try {
       if (user && !user.isAnonymous) {
-        const result = await verifyExistingSession(user);
-        if (result) return;
+        if (await restoreSession(user)) return;
+        // finishSession already chose a screen when it refused the session.
+        if (Object.values(LOGIN_STEPS).some((id) => $(id) && !$(id).classList.contains("hidden"))) return;
       }
     } catch {
-      // Fall through to the name screen.
+      // Fall through to the login screen.
     }
-    showStep("name");
+    showLoginStart();
   });
 }

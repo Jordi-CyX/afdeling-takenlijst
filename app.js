@@ -595,7 +595,7 @@ function openTask(id) {
     btn.id = "tick-btn";
     btn.onclick = () => guardedToggle(() => markPending(task.id));
     actions.append(btn);
-  } else if (task.status === "pending") {
+  } else if (task.status === "pending" && canUntick(task)) {
     const btn = el("button", "secondary", "Ongedaan maken");
     btn.type = "button";
     btn.id = "untick-btn";
@@ -644,6 +644,13 @@ function canToggle(task) {
   return assigneeId === staff.employeeId || assigneeId === "ALLEN" || assigneeId === "";
 }
 
+// Untick only by whoever ticked it (or legacy ticks without pendingByEmployeeId).
+function canUntick(task) {
+  const staff = getCurrentStaff();
+  const by = task && task.pendingByEmployeeId != null ? String(task.pendingByEmployeeId) : "";
+  return Boolean(staff) && (by === "" || by === staff.employeeId);
+}
+
 let toggleBusy = false;
 let lastToggleAt = 0;
 
@@ -670,7 +677,8 @@ async function markPending(id) {
     return;
   }
   const staff = getCurrentStaff();
-  const pendingBy = staff && staff.name ? staff.name : "";
+  // Must equal the own employees doc name (rules); pendingByEmployeeId is required.
+  const pendingBy = staff ? officialStaffName().slice(0, 60) : "";
   if (!pendingBy) {
     showToast("Je bent niet ingelogd.", "error");
     return;
@@ -679,7 +687,8 @@ async function markPending(id) {
     await updateDoc(doc(db, "tasks", id), {
       status: "pending",
       pendingAt: new Date().toISOString(),
-      pendingBy
+      pendingBy,
+      pendingByEmployeeId: staff.employeeId
     });
     closeModal();
     showToast("Taak is ter controle gezet.", "success");
@@ -691,15 +700,16 @@ async function markPending(id) {
 async function unmarkPending(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "pending") return;
-  if (!canToggle(task)) {
-    showToast("Je kunt alleen je eigen taken of taken voor Allen terugzetten.", "error");
+  if (!canToggle(task) || !canUntick(task)) {
+    showToast("Alleen wie de taak afvinkte kan dit terugzetten.", "error");
     return;
   }
   try {
     await updateDoc(doc(db, "tasks", id), {
       status: "open",
       pendingAt: null,
-      pendingBy: null
+      pendingBy: null,
+      pendingByEmployeeId: null
     });
     closeModal();
     showToast("Afvinken ongedaan gemaakt.", "success");

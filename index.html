@@ -67,38 +67,25 @@
 
   <div id="staff-login" class="staff-login">
     <div class="login-screen-card staff-login-card">
-      <form id="staff-name-form">
-        <h2>Inloggen</h2>
-        <p class="staff-login-hint">Typ je naam om verder te gaan.</p>
-        <label>
-          Jouw naam
-          <input type="text" id="staff-name-input" name="staff-name" autocomplete="username" autocapitalize="words" spellcheck="false" required>
-        </label>
-        <p id="staff-login-notice" class="form-notice hidden" role="status"></p>
-        <p id="staff-name-error" class="form-error hidden"></p>
-        <div class="form-actions">
-          <button type="submit">Verder</button>
-        </div>
-      </form>
-
       <form id="staff-code-form" class="hidden">
         <h2>Startcode invoeren</h2>
-        <p class="staff-login-hint" id="staff-code-hello">Vul de startcode in die je van je leidinggevende hebt gekregen.</p>
+        <p class="staff-login-hint">Vul de startcode in die je van je leidinggevende hebt gekregen.</p>
         <label>
           Startcode
           <input type="text" id="staff-code-input" class="code-input" name="start-code" placeholder="XXXXX-XXXXX" maxlength="11" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" required>
         </label>
         <p id="staff-code-notice" class="form-notice hidden" role="status"></p>
-        <p id="staff-code-error" class="form-error hidden"></p>
+        <p id="staff-code-error" class="form-error hidden" role="alert"></p>
         <div class="form-actions">
           <button type="submit">Verder</button>
         </div>
-        <button type="button" class="text-btn" id="staff-code-back">Andere naam</button>
+        <button type="button" class="text-btn" id="staff-code-forgot">Geen startcode of pincode vergeten?</button>
+        <button type="button" class="text-btn hidden" id="staff-code-back">Terug naar inloggen met pincode</button>
       </form>
 
       <form id="staff-pin-setup-form" class="hidden">
         <h2>Pincode instellen</h2>
-        <p class="staff-login-hint">Kies een pincode van 6 cijfers. Gebruik geen makkelijke reeks zoals 123456 of 111111.</p>
+        <p class="staff-login-hint" id="staff-setup-hello">Kies een pincode van 6 cijfers. Gebruik geen makkelijke reeks zoals 123456 of 111111.</p>
         <input type="text" id="staff-setup-username" name="username" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true">
         <label>
           Pincode invoeren
@@ -108,15 +95,15 @@
           Pincode bevestigen
           <input type="password" id="staff-pin-confirm" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" required>
         </label>
-        <p id="staff-pin-setup-error" class="form-error hidden"></p>
+        <p id="staff-pin-setup-error" class="form-error hidden" role="alert"></p>
         <div class="form-actions">
           <button type="submit">Opslaan</button>
         </div>
-        <button type="button" class="text-btn" id="staff-setup-back">Andere naam</button>
+        <button type="button" class="text-btn" id="staff-setup-back">Andere startcode</button>
       </form>
 
       <form id="staff-pin-form" class="hidden">
-        <h2>Pincode invoeren</h2>
+        <h2>Inloggen</h2>
         <p class="staff-login-hint" id="staff-pin-hello">Vul je pincode in.</p>
         <input type="text" id="staff-pin-username" name="username" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true">
         <label>
@@ -124,12 +111,31 @@
           <input type="password" id="staff-pin-input" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="current-password" required>
         </label>
         <p id="staff-pin-notice" class="form-notice hidden" role="status"></p>
-        <p id="staff-pin-error" class="form-error hidden"></p>
+        <p id="staff-pin-error" class="form-error hidden" role="alert"></p>
         <div class="form-actions">
           <button type="submit">Inloggen</button>
         </div>
         <button type="button" class="secondary" id="staff-pin-forgot">Pincode vergeten</button>
-        <button type="button" class="text-btn" id="staff-pin-back">Andere naam</button>
+        <button type="button" class="text-btn" id="staff-pin-other">Andere startcode gebruiken / andere medewerker op dit toestel</button>
+      </form>
+
+      <form id="staff-reset-form" class="hidden">
+        <h2>Pincode vergeten</h2>
+        <p class="staff-login-hint">Je leidinggevende krijgt een verzoek en geeft je persoonlijk een nieuwe startcode. Met dit verzoek krijg je zelf nog geen toegang.</p>
+        <label>
+          Jouw naam
+          <input type="text" id="staff-reset-name" name="reset-name" maxlength="60" autocomplete="name" autocapitalize="words" spellcheck="false" required>
+        </label>
+        <label>
+          Toelichting (optioneel)
+          <textarea id="staff-reset-note" name="reset-note" maxlength="200" rows="3"></textarea>
+        </label>
+        <p id="staff-reset-notice" class="form-notice hidden" role="status"></p>
+        <p id="staff-reset-error" class="form-error hidden" role="alert"></p>
+        <div class="form-actions">
+          <button type="submit">Verzoek versturen</button>
+        </div>
+        <button type="button" class="text-btn" id="staff-reset-back">Terug</button>
       </form>
     </div>
   </div>
