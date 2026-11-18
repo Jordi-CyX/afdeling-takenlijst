@@ -228,7 +228,8 @@ export function normalizeTask(id, data) {
     createdByRole: typeof d.createdByRole === "string" ? d.createdByRole : "",
     createdByEmployeeId: d.createdByEmployeeId || "",
     createdByName: d.createdByName || "",
-    adminReview: typeof d.adminReview === "string" ? d.adminReview : ""
+    adminReview: typeof d.adminReview === "string" ? d.adminReview : "",
+    dueDate: (typeof d.dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.dueDate.trim())) ? d.dueDate.trim() : ""
   };
 }
 
@@ -295,6 +296,8 @@ export function serializeTask(task) {
     payload.createdByName = task.createdByName || "";
     payload.adminReview = task.adminReview || "";
   }
+  const dueDate = typeof task.dueDate === "string" ? task.dueDate.trim() : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) payload.dueDate = dueDate;
   return payload;
 }
 
