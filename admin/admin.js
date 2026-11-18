@@ -6,7 +6,6 @@ import {
   signInWithEmailAndPassword,
   signOut
 } from "../firebase-init.js";
-import { ADMIN_EMAIL } from "./admin-config.js";
 import { increment, arrayUnion, deleteField, Timestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   db,
@@ -17,6 +16,7 @@ import {
   deleteDoc,
   collection,
   writeBatch,
+  getDocs,
   listenCollection,
   generateDueInstances,
   normalizeTask,
@@ -27,6 +27,7 @@ import {
   readCompressedPhotos,
   assertDocSize,
   generateStartCode,
+  isValidStartCode,
   formatStartCode,
   isSafeImageDataUrl,
   START_CODE_VALID_DAYS,
@@ -56,11 +57,13 @@ let listenersStarted = false;
 let generating = false;
 let seededOnce = false;
 let pinResetRequests = [];
-let nameIndexEntries = [];
+let staffAccounts = [];
+let rawTasks = [];
+let taskMeta = new Map();
+let taskMetaReady = false;
+let migratingDueDates = false;
 let startCodes = [];
 let employeesReady = false;
-let nameIndexReady = false;
-let nameIndexSyncing = false;
 let swUpdateHandlerBound = false;
 
 
@@ -241,10 +244,15 @@ function startListeners() {
   if (listenersStarted) return;
   listenersStarted = true;
   listenCollection("tasks", normalizeTask, (list) => {
-    tasks = list;
-    renderAll();
-    if (currentTaskId) openTask(currentTaskId);
+    rawTasks = list;
+    applyTaskMeta();
   });
+  // L1: streefdatum staat in taskMeta/{taskId} (alleen admin + reader).
+  listenCollection("taskMeta", (id, d) => ({ id, dueDate: d && typeof d.dueDate === "string" ? d.dueDate : "" }), (list) => {
+    taskMeta = new Map(list.map((m) => [m.id, m]));
+    taskMetaReady = true;
+    applyTaskMeta();
+  }, ignoreListenerError);
   listenCollection("recurring", normalizeTemplate, async (list) => {
     templates = list;
     await maybeGenerate();
@@ -259,14 +267,15 @@ function startListeners() {
       seededOnce = true;
       seedEmployees().catch(() => {});
     }
-    syncNameIndex().catch(() => {});
   }, ignoreListenerError);
-  listenCollection("nameIndex", normalizeNameIndexEntry, (list) => {
-    nameIndexEntries = list;
-    nameIndexReady = true;
+  listenCollection("staffAccounts", (id, d) => ({
+    id,
+    employeeId: (d && d.employeeId) || "",
+    pinVersion: Number.isFinite(Number(d && d.pinVersion)) ? Number(d.pinVersion) : 0,
+    startCode: d && typeof d.startCode === "string" ? d.startCode : ""
+  }), (list) => {
+    staffAccounts = list;
     renderEmployees();
-    renderPinResets();
-    syncNameIndex().catch(() => {});
   }, ignoreListenerError);
   listenCollection("startCodes", normalizeStartCodeDoc, (list) => {
     startCodes = list;
@@ -287,6 +296,55 @@ function startListeners() {
 
 function ignoreListenerError() {
   // New collections are denied until the latest rules are published.
+}
+
+function applyTaskMeta() {
+  tasks = rawTasks.map((task) => {
+    const meta = taskMeta.get(task.id);
+    const dueDate = (meta && isValidDueDate(meta.dueDate)) ? meta.dueDate : (task.dueDate || "");
+    return { ...task, dueDate };
+  });
+  renderAll();
+  if (currentTaskId) openTask(currentTaskId);
+  migrateDueDates().catch(() => {});
+}
+
+// Verplaats oude tasks.dueDate naar taskMeta (eenmalig, werkt pas met de stap-3-regels).
+async function migrateDueDates() {
+  if (!isAdmin || !taskMetaReady || migratingDueDates) return;
+  const legacy = rawTasks.filter((task) => isValidDueDate(task.dueDate));
+  if (!legacy.length) return;
+  migratingDueDates = true;
+  try {
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const task of legacy) {
+      if (!taskMeta.has(task.id)) {
+        batch.set(doc(db, "taskMeta", task.id), { dueDate: task.dueDate.trim() });
+        count += 1;
+      }
+      batch.update(doc(db, "tasks", task.id), { dueDate: deleteField() });
+      count += 1;
+      if (count >= 400) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count) await batch.commit();
+  } catch {
+    // Regels nog niet gepubliceerd of offline: later opnieuw.
+  } finally {
+    migratingDueDates = false;
+  }
+}
+
+// Status van de inlog van een medewerker, op basis van staffAccounts (admin-only).
+function accountStatus(emp) {
+  const version = Number(emp.pinVersion) || 0;
+  const accounts = staffAccounts.filter((a) => a.employeeId === emp.id);
+  const valid = accounts.find((a) => a.pinVersion === version && isValidStartCode(a.startCode));
+  return { valid: Boolean(valid), stale: !valid && accounts.length > 0 };
 }
 
 function normalizeReport(id, data) {
@@ -352,16 +410,7 @@ function newReportCount() {
   return reports.filter((r) => r.status === "nieuw").length;
 }
 
-function normalizeNameIndexEntry(id, data) {
-  const d = data || {};
-  return {
-    id,
-    employeeId: d.employeeId || "",
-    hasPin: d.hasPin === true,
-    pinVersion: Number.isFinite(Number(d.pinVersion)) ? Number(d.pinVersion) : 0,
-    loginKey: typeof d.loginKey === "string" ? d.loginKey : ""
-  };
-}
+
 
 function timestampToIso(value) {
   if (!value) return "";
@@ -397,11 +446,12 @@ function normalizePinResetRequest(id, data) {
   const d = data || {};
   return {
     id,
-    employeeId: d.employeeId || id,
-    name: d.name || "",
+    legacyEmployeeId: typeof d.employeeId === "string" ? d.employeeId : "",
+    name: typeof d.name === "string" ? d.name.slice(0, 60) : "",
+    note: typeof d.note === "string" ? d.note.slice(0, 200) : "",
     requestedAt: d.requestedAt && typeof d.requestedAt.toDate === "function"
       ? d.requestedAt.toDate().toISOString()
-      : (d.requestedAt || "")
+      : (typeof d.requestedAt === "string" ? d.requestedAt : "")
   };
 }
 
@@ -409,104 +459,41 @@ function nameIndexKey(name) {
   return normalizeName(name);
 }
 
-function nameIndexForEmployee(emp) {
-  if (!emp) return null;
-  const key = nameIndexKey(emp.name);
-  return nameIndexEntries.find((entry) => entry.id === key)
-    || nameIndexEntries.find((entry) => entry.employeeId === emp.id)
-    || null;
-}
+
 
 function employeeHasPin(emp) {
-  const entry = nameIndexForEmployee(emp);
-  return Boolean(entry && entry.hasPin);
+  return accountStatus(emp).valid;
 }
 
 function resetRequestName(req) {
-  const emp = employees.find((e) => e.id === req.employeeId);
-  return (emp && emp.name) || req.name || req.employeeId;
+  return req.name || "(geen naam)";
 }
 
-function nameIndexPayload(emp, hasPin) {
-  return {
-    employeeId: emp.id,
-    hasPin: Boolean(hasPin),
-    pinVersion: Number(emp.pinVersion) || 0
-  };
+// M2: het verzoek bevat alleen een opgegeven naam; de admin kiest zelf de medewerker.
+function guessEmployeeForRequest(req) {
+  const active = activeEmployees();
+  if (req.legacyEmployeeId) {
+    const byId = active.find((e) => e.id === req.legacyEmployeeId);
+    if (byId) return byId;
+  }
+  const key = nameIndexKey(req.name);
+  const matches = active.filter((e) => nameIndexKey(e.name) === key);
+  return matches.length === 1 ? matches[0] : null;
 }
+
+
 
 function findNameConflict(name, employeeId) {
   const key = nameIndexKey(name);
   if (!key) return "Ongeldige naam.";
   const taken = employees.find((e) => e.id !== employeeId && nameIndexKey(e.name) === key);
   if (taken) return `De naam ${taken.name} is al in gebruik.`;
-  const entry = nameIndexEntries.find((e) => e.id === key && e.employeeId && e.employeeId !== employeeId);
-  if (entry) return "Deze naam is al gekoppeld aan een andere medewerker.";
   return "";
 }
 
-async function syncNameIndex({ force = false } = {}) {
-  if (!isAdmin || nameIndexSyncing || !employeesReady || !nameIndexReady) return { wrote: 0, conflicts: [] };
-  const conflicts = [];
-  const writes = [];
-  for (const emp of employees) {
-    const key = nameIndexKey(emp.name);
-    if (!key) continue;
-    const existing = nameIndexEntries.find((entry) => entry.id === key);
-    const pinVersion = Number(emp.pinVersion) || 0;
-    if (!existing) {
-      const byId = nameIndexEntries.find((entry) => entry.employeeId === emp.id);
-      writes.push({
-        key,
-        data: {
-          employeeId: emp.id,
-          hasPin: force ? Boolean(byId && byId.hasPin) : false,
-          pinVersion,
-          ...(force && byId && byId.loginKey ? { loginKey: byId.loginKey } : {})
-        }
-      });
-      continue;
-    }
-    if (existing.employeeId && existing.employeeId !== emp.id) {
-      conflicts.push(emp.name);
-      continue;
-    }
-    if (force && (existing.employeeId !== emp.id || existing.pinVersion !== pinVersion)) {
-      writes.push({
-        key,
-        data: { employeeId: emp.id, hasPin: existing.hasPin === true, pinVersion }
-      });
-    }
-  }
-  if (!writes.length) return { wrote: 0, conflicts };
-  nameIndexSyncing = true;
-  try {
-    const ok = await safeWrite(async () => {
-      let batch = writeBatch(db);
-      let count = 0;
-      for (const item of writes) {
-        batch.set(doc(db, "nameIndex", item.key), item.data, { merge: true });
-        count += 1;
-        if (count >= 400) {
-          await batch.commit();
-          batch = writeBatch(db);
-          count = 0;
-        }
-      }
-      if (count) await batch.commit();
-    });
-    return { wrote: ok ? writes.length : 0, conflicts };
-  } finally {
-    nameIndexSyncing = false;
-  }
-}
 
-async function rebuildNameIndex() {
-  const result = await syncNameIndex({ force: true });
-  if (result.wrote) showToast(`Naamindex bijgewerkt (${result.wrote} ${result.wrote === 1 ? "item" : "items"}).`, "ok");
-  else if (!result.conflicts.length) showToast("Naamindex was al bij. Ontbrekende namen worden ook automatisch aangevuld.", "ok");
-  if (result.conflicts.length) showToast("Sommige namen botsen in de index: " + result.conflicts.join(", "));
-}
+
+
 
 function renderPinResets() {
   const targets = ["dashboard-pin-resets", "medewerkers-pin-resets"];
@@ -523,31 +510,39 @@ function renderPinResets() {
 }
 
 function pinResetItem(req) {
-  const emp = employees.find((e) => e.id === req.employeeId);
   const when = req.requestedAt ? formatDateTime(req.requestedAt) : "";
-  const canIssue = Boolean(emp && emp.active);
-  const hint = !emp
-    ? "Onbekende medewerker. Wis het verzoek."
-    : (emp.active ? "Maak alleen een startcode als de medewerker het zelf aan je vraagt." : "Inactief: geen startcode mogelijk.");
+  const guess = guessEmployeeForRequest(req);
   const frag = dom`
     <div class="pin-reset-item">
-      <p><strong>${resetRequestName(req)}</strong> heeft pincode vergeten${when ? " · " + when : ""}
-        <span class="pin-meta">${hint}</span></p>
+      <p><strong>Opgegeven naam: ${resetRequestName(req)}</strong>${when ? " · " + when : ""}
+        ${req.note ? dom`<span class="pin-meta pre-line">Toelichting: ${req.note}</span>` : ""}
+        <span class="pin-meta">Niet gecontroleerd. Maak alleen een startcode als de medewerker het persoonlijk aan je vraagt.</span></p>
+      <label class="pin-reset-pick">Medewerker
+        <select data-pick-employee></select>
+      </label>
       <div class="pin-reset-actions">
-        ${canIssue ? dom`<button type="button" data-issue-code>Startcode maken</button>` : ""}
+        <button type="button" data-issue-code>Startcode maken</button>
         <button type="button" class="secondary" data-dismiss-reset>Verzoek wissen</button>
       </div>
     </div>`;
-  const issueBtn = frag.querySelector("[data-issue-code]");
-  if (issueBtn) issueBtn.onclick = () => issueStartCode(req.employeeId);
-  frag.querySelector("[data-dismiss-reset]").onclick = () => dismissResetRequest(req.employeeId);
+  const select = frag.querySelector("[data-pick-employee]");
+  setOptions(select, [["", "Kies medewerker…"], ...activeEmployees().map((e) => [e.id, e.name])]);
+  select.value = guess ? guess.id : "";
+  frag.querySelector("[data-issue-code]").onclick = () => {
+    if (!select.value) {
+      showToast("Kies eerst de medewerker die dit verzoek deed.");
+      return;
+    }
+    issueStartCode(select.value, { requestId: req.id });
+  };
+  frag.querySelector("[data-dismiss-reset]").onclick = () => dismissResetRequest(req.id);
   return frag;
 }
 
 async function dismissResetRequest(id) {
-  const req = pinResetRequests.find((r) => r.employeeId === id);
+  const req = pinResetRequests.find((r) => r.id === id);
   const name = req ? resetRequestName(req) : id;
-  const confirmed = await confirmAction(`Verzoek van ${name} wissen zonder startcode te maken?`, { title: "Verzoek wissen", confirmText: "Wissen" });
+  const confirmed = await confirmAction(`Verzoek "${name}" wissen zonder startcode te maken?`, { title: "Verzoek wissen", confirmText: "Wissen" });
   if (!confirmed) return;
   await safeWrite(() => deleteDoc(doc(db, "pinResetRequests", id)));
 }
@@ -557,9 +552,9 @@ async function resetEmployeePin(id) {
   return issueStartCode(id);
 }
 
-// Eén admin-batch: pinVersion+1, nameIndex (hasPin=false, loginKey weg), resetverzoek weg,
+// Eén admin-batch: pinVersion+1, resetverzoek weg,
 // oudere codes van deze medewerker weg, nieuwe code met de nieuwe pinVersion.
-async function issueStartCode(employeeId) {
+async function issueStartCode(employeeId, { requestId = "" } = {}) {
   const emp = employees.find((e) => e.id === employeeId);
   if (!emp) {
     showToast("Medewerker niet gevonden.");
@@ -585,35 +580,29 @@ async function issueStartCode(employeeId) {
   const expiresAt = Timestamp.fromMillis(createdAt.toMillis() + START_CODE_VALID_DAYS * 86400000);
   const ok = await safeWrite(async () => {
     const batch = writeBatch(db);
-    addStartCodeOps(batch, emp, code, createdAt, expiresAt);
+    addStartCodeOps(batch, emp, code, createdAt, expiresAt, requestId);
     await batch.commit();
   });
   if (ok) showStartCode({ name: emp.name, code, expiresAt: expiresAt.toDate().toISOString() });
 }
 
 // Voegt de uitgifte-writes voor één medewerker toe aan een batch; geeft het aantal writes terug.
-function addStartCodeOps(batch, emp, code, createdAt, expiresAt) {
+// Voegt de uitgifte-writes voor één medewerker toe aan een batch; geeft het aantal writes terug.
+// De code bevat de weergavenaam (name), zodat de medewerkers-app geen nameIndex nodig heeft.
+function addStartCodeOps(batch, emp, code, createdAt, expiresAt, requestId = "") {
   const pinVersion = (Number(emp.pinVersion) || 0) + 1;
-  const key = nameIndexKey(emp.name);
   let writes = 0;
   batch.update(doc(db, "employees", emp.id), { pinVersion });
   writes += 1;
-  if (key) {
-    batch.set(doc(db, "nameIndex", key), {
-      employeeId: emp.id,
-      hasPin: false,
-      pinVersion,
-      loginKey: deleteField()
-    }, { merge: true });
+  for (const req of pinResetRequests.filter((r) => r.id === requestId || r.id === emp.id || r.legacyEmployeeId === emp.id)) {
+    batch.delete(doc(db, "pinResetRequests", req.id));
     writes += 1;
   }
-  batch.delete(doc(db, "pinResetRequests", emp.id));
-  writes += 1;
   for (const old of startCodes.filter((c) => c.employeeId === emp.id && c.id !== code)) {
     batch.delete(doc(db, "startCodes", old.id));
     writes += 1;
   }
-  batch.set(doc(db, "startCodes", code), { employeeId: emp.id, pinVersion, createdAt, expiresAt, used: false });
+  batch.set(doc(db, "startCodes", code), { employeeId: emp.id, name: emp.name, pinVersion, createdAt, expiresAt, used: false });
   return writes + 1;
 }
 
@@ -741,8 +730,6 @@ function applyAuthUi() {
 
 function setupUi() {
   document.getElementById("login-form").onsubmit = submitLogin;
-  const loginEmail = document.getElementById("login-email");
-  if (loginEmail && !loginEmail.value) loginEmail.value = ADMIN_EMAIL;
   document.getElementById("logout-btn").onclick = logout;
   document.getElementById("nav-toggle").onclick = (event) => {
     event.stopPropagation();
@@ -826,7 +813,8 @@ function setupUi() {
     if (event.target.id === "image-lightbox") closeLightbox();
   };
   document.getElementById("cleanup-btn").onclick = cleanupOldCompleted;
-  document.getElementById("rebuild-name-index-btn").onclick = rebuildNameIndex;
+  const purgeBtn = document.getElementById("purge-name-index-btn");
+  if (purgeBtn) purgeBtn.onclick = purgeNameIndex;
   document.getElementById("workflow-period").onchange = renderWorkflow;
   document.getElementById("export-btn").onclick = exportData;
   document.getElementById("import-btn").onclick = () => document.getElementById("import-file").click();
@@ -915,7 +903,7 @@ function updateRecurrenceVisibility() {
 
 async function submitLogin(event) {
   event.preventDefault();
-  const email = document.getElementById("login-email").value.trim() || ADMIN_EMAIL;
+  const email = document.getElementById("login-email").value.trim();
   const password = document.getElementById("login-password").value;
   const error = document.getElementById("login-error");
   document.getElementById("login-password").value = "";
@@ -1024,11 +1012,17 @@ async function submitTaskForm(event) {
         description,
         location,
         ...assignee,
-        photos: nextPhotos,
-        dueDate: readDueDateInput() || null
+        photos: nextPhotos
       };
       assertDocSize({ ...serializeTask({ ...task, ...payload }), ...payload });
-      const ok = await safeWrite(() => updateDoc(doc(db, "tasks", editingTaskId), payload));
+      const dueDate = readDueDateInput();
+      const ok = await safeWrite(async () => {
+        const batch = writeBatch(db);
+        batch.update(doc(db, "tasks", editingTaskId), { ...payload, dueDate: deleteField() });
+        if (dueDate) batch.set(doc(db, "taskMeta", editingTaskId), { dueDate });
+        else batch.delete(doc(db, "taskMeta", editingTaskId));
+        await batch.commit();
+      });
       if (ok) resetTaskForm();
       return;
     }
@@ -1079,11 +1073,18 @@ async function submitTaskForm(event) {
       ...assignee,
       photos,
       status: "open",
-      createdAt: new Date().toISOString(),
-      dueDate: readDueDateInput()
+      createdAt: new Date().toISOString()
     });
+    delete payload.dueDate; // L1: streefdatum alleen in taskMeta
     assertDocSize(payload);
-    const ok = await safeWrite(() => addDoc(collection(db, "tasks"), payload));
+    const dueDate = readDueDateInput();
+    const ok = await safeWrite(async () => {
+      const ref = doc(collection(db, "tasks"));
+      const batch = writeBatch(db);
+      batch.set(ref, payload);
+      if (dueDate) batch.set(doc(db, "taskMeta", ref.id), { dueDate });
+      await batch.commit();
+    });
     if (ok) resetTaskForm();
   } catch (err) {
     showToast(err.message || "Opslaan mislukt.");
@@ -1867,13 +1868,14 @@ function renderEmployees() {
 }
 
 function employeeItem(emp) {
-  const entry = nameIndexForEmployee(emp);
-  const hasPin = Boolean(entry && entry.hasPin);
-  const legacy = hasPin && !(entry && entry.loginKey);
+  const status = accountStatus(emp);
+  const hasPin = status.valid;
   const open = openStartCodeFor(emp);
+  const legacy = status.stale && !open;
   let pinText = "Nog geen pincode";
-  if (hasPin) pinText = legacy ? "Oude methode, zonder startcode: werkt niet meer" : "Pincode ingesteld met startcode";
+  if (hasPin) pinText = "Pincode ingesteld met startcode";
   else if (open) pinText = "Wacht op pincode met startcode";
+  else if (status.stale) pinText = "Oude of verlopen inlog: werkt niet meer";
   const frag = dom`
     <div class="${legacy && emp.active ? "employee-item employee-item--needs-code" : "employee-item"}">
       <div class="employee-top">
@@ -1887,7 +1889,7 @@ function employeeItem(emp) {
         <span class="badge ${emp.active ? "open" : "paused"}">${emp.active ? "Actief" : "Inactief"}</span>
       </div>
       <div class="employee-actions">
-        ${emp.active ? dom`<button type="button" data-act="code" title="Startcode (7 dagen geldig, eenmalig)">${hasPin && !legacy ? "Pincode resetten (startcode)" : "Startcode maken"}</button>` : ""}
+        ${emp.active ? dom`<button type="button" data-act="code" title="Startcode (7 dagen geldig, eenmalig)">${hasPin ? "Pincode resetten (startcode)" : "Startcode maken"}</button>` : ""}
         ${open ? dom`<button type="button" class="secondary" data-act="show-code">Code tonen</button>` : ""}
         ${open ? dom`<button type="button" class="secondary" data-act="delete-code">Code verwijderen</button>` : ""}
         <button type="button" class="secondary" data-act="rename">Hernoemen</button>
@@ -1926,7 +1928,6 @@ async function addEmployee(event) {
   const ok = await safeWrite(async () => {
     const batch = writeBatch(db);
     batch.set(doc(db, "employees", id), { name: emp.name, active: true, createdAt: emp.createdAt, pinVersion: 0 }, { merge: true });
-    batch.set(doc(db, "nameIndex", nameIndexKey(name)), nameIndexPayload(emp, false));
     await batch.commit();
   });
   if (ok) document.getElementById("employee-name").value = "";
@@ -1941,9 +1942,7 @@ async function seedEmployees() {
     const existing = employees.find((e) => e.id === id);
     if (existing) continue;
     if (findNameConflict(name, id)) continue;
-    const emp = { id, name, pinVersion: 0 };
     batch.set(doc(db, "employees", id), { name, active: true, createdAt: now, pinVersion: 0 }, { merge: true });
-    batch.set(doc(db, "nameIndex", nameIndexKey(name)), nameIndexPayload(emp, false));
     writes += 1;
   }
   if (!writes) {
@@ -1975,9 +1974,6 @@ async function renameEmployee(id) {
     showToast(conflict);
     return;
   }
-  const oldKey = nameIndexKey(emp.name);
-  const newKey = nameIndexKey(name);
-  const existingIndex = nameIndexForEmployee(emp);
   const ok = await safeWrite(async () => {
     let batch = writeBatch(db);
     let count = 0;
@@ -1993,14 +1989,8 @@ async function renameEmployee(id) {
       }
     };
     await add(doc(db, "employees", id), { name });
-    if (oldKey && newKey && oldKey !== newKey) {
-      await add(doc(db, "nameIndex", newKey), {
-        employeeId: id,
-        hasPin: Boolean(existingIndex && existingIndex.hasPin),
-        pinVersion: Number(emp.pinVersion) || 0,
-        ...(existingIndex && existingIndex.loginKey ? { loginKey: existingIndex.loginKey } : {})
-      }, "set");
-      await add(doc(db, "nameIndex", oldKey), {}, "delete");
+    for (const code of startCodes.filter((c) => c.employeeId === id && !c.used)) {
+      await add(doc(db, "startCodes", code.id), { name });
     }
     for (const task of tasks) {
       if (task.assigneeId !== id) continue;
@@ -2043,12 +2033,9 @@ async function removeEmployee(id) {
   if (!emp) return;
   const ok = await confirmAction(`Medewerker ${emp.name} verwijderen? Bestaande taken blijven bewaard.`, { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
   if (!ok) return;
-  const key = nameIndexKey(emp.name);
   await safeWrite(async () => {
     const batch = writeBatch(db);
     batch.delete(doc(db, "employees", id));
-    if (key) batch.delete(doc(db, "nameIndex", key));
-    batch.delete(doc(db, "pinResetRequests", id));
     for (const code of startCodes.filter((c) => c.employeeId === id)) {
       batch.delete(doc(db, "startCodes", code.id));
     }
@@ -2235,9 +2222,15 @@ async function reopenTask(id) {
 }
 
 async function deleteTask(id) {
-  const confirmed = await confirmAction("Taak definitief verwijderen?", { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
+  const task = tasks.find((item) => item.id === id);
+  const confirmed = await confirmAction(`Taak${task ? ` "${task.title}"` : ""} definitief verwijderen?`, { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
   if (!confirmed) return;
-  const ok = await safeWrite(() => deleteDoc(doc(db, "tasks", id)));
+  const ok = await safeWrite(async () => {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, "tasks", id));
+    batch.delete(doc(db, "taskMeta", id));
+    await batch.commit();
+  });
   if (ok) closeModal();
 }
 
@@ -2282,7 +2275,8 @@ async function cleanupOldCompleted() {
     let count = 0;
     for (const task of old) {
       batch.delete(doc(db, "tasks", task.id));
-      count += 1;
+      batch.delete(doc(db, "taskMeta", task.id));
+      count += 2;
       if (count >= 400) {
         await batch.commit();
         batch = writeBatch(db);
@@ -2411,14 +2405,6 @@ async function importData(event) {
             createdAt: emp.createdAt || new Date().toISOString(),
             pinVersion
           }, { merge: true });
-          if (record.name) {
-            const existing = nameIndexEntries.find((e) => e.id === nameIndexKey(record.name) && e.employeeId === id);
-            batch.set(doc(db, "nameIndex", nameIndexKey(record.name)), {
-              employeeId: id,
-              hasPin: Boolean(existing && existing.hasPin),
-              pinVersion
-            }, { merge: true });
-          }
         }
         await batch.commit();
       }
@@ -2428,6 +2414,28 @@ async function importData(event) {
     }
   };
   reader.readAsText(file);
+}
+
+// H1/M1: de medewerkers-app gebruikt nameIndex niet meer. Oude documenten kunnen weg.
+async function purgeNameIndex() {
+  const confirmed = await confirmAction("Alle documenten in de oude naamindex verwijderen? De medewerkers-app gebruikt die niet meer.", { title: "Naamindex verwijderen", confirmText: "Verwijderen", danger: true });
+  if (!confirmed) return;
+  const ok = await safeWrite(async () => {
+    const snap = await getDocs(collection(db, "nameIndex"));
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const d of snap.docs) {
+      batch.delete(d.ref);
+      count += 1;
+      if (count >= 400) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count) await batch.commit();
+  });
+  if (ok) showToast("Naamindex verwijderd.", "ok");
 }
 
 onAuthStateChanged(auth, async (user) => {

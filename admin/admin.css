@@ -852,3 +852,13 @@ button.stat-card:active {
 }
 
 .bulk-code-row button { padding: 0.35rem 0.6rem; font-size: 0.85rem; }
+
+/* --- Stap 3: resetverzoeken koppelen --- */
+.pin-reset-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1 1 12rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}

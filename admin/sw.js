@@ -1,10 +1,9 @@
-const CACHE_NAME = "zeiklijst-admin-v21";
+const CACHE_NAME = "zeiklijst-admin-v22";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
   "./index.html",
   "./admin.js",
-  "./admin-config.js",
   "./admin.css",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
