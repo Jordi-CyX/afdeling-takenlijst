@@ -1,12 +1,12 @@
 import {
   auth,
   ADMIN_UID,
-  ADMIN_EMAIL,
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
   signOut
 } from "../firebase-init.js";
+import { ADMIN_EMAIL } from "./admin-config.js";
 import { increment, arrayUnion, deleteField, Timestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   db,
@@ -741,6 +741,8 @@ function applyAuthUi() {
 
 function setupUi() {
   document.getElementById("login-form").onsubmit = submitLogin;
+  const loginEmail = document.getElementById("login-email");
+  if (loginEmail && !loginEmail.value) loginEmail.value = ADMIN_EMAIL;
   document.getElementById("logout-btn").onclick = logout;
   document.getElementById("nav-toggle").onclick = (event) => {
     event.stopPropagation();
@@ -2203,7 +2205,7 @@ async function rejectTask(id) {
   if (!result.ok) return;
   const reason = (result.value || "").trim();
   const at = new Date().toISOString();
-  const by = (auth.currentUser && auth.currentUser.email) || "Admin";
+  const by = "Beheerder"; // V8: geen admin-e-mailadres in taakdata die medewerkers lezen
   const ok = await safeWrite(() => updateDoc(doc(db, "tasks", id), {
     status: "open",
     pendingAt: null,

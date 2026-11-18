@@ -240,8 +240,20 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // Eigen medewerker-doc, ook als inactief: alleen get, alleen met geldig staffAccount
+    // (zelfde employeeId, geldige startCode, pinVersion klopt). Zo kan de app
+    // "Je account is niet actief" tonen. Geeft verder geen toegang.
+    function isOwnEmployeeDoc(employeeId) {
+      return isSignedIn()
+        && exists(staffAccountPath())
+        && staffAccount().employeeId == employeeId
+        && isStartCodeFormat(staffAccount().get("startCode", null))
+        && staffAccount().pinVersion == employeePinVersion(resource.data);
+    }
+
     match /employees/{employeeId} {
-      allow read: if isAdmin() || isValidStaff() || isReader();
+      allow get: if isAdmin() || isValidStaff() || isReader() || isOwnEmployeeDoc(employeeId);
+      allow list: if isAdmin() || isValidStaff() || isReader();
       allow create, update, delete: if isAdmin();
     }
 

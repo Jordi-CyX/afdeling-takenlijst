@@ -22,7 +22,6 @@ export const firebaseConfig = {
 };
 
 export const ADMIN_UID = "Of3mAU2qJeczN6NDUfkgT73kfJn1";
-export const ADMIN_EMAIL = "j.g_vdbos@outlook.com";
 
 export const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(app, {
