@@ -580,30 +580,110 @@ async function issueStartCode(employeeId) {
     danger: hasPin
   });
   if (!confirmed) return;
-  const pinVersion = (Number(emp.pinVersion) || 0) + 1;
   const code = generateStartCode();
   const createdAt = Timestamp.now();
   const expiresAt = Timestamp.fromMillis(createdAt.toMillis() + START_CODE_VALID_DAYS * 86400000);
-  const key = nameIndexKey(emp.name);
   const ok = await safeWrite(async () => {
     const batch = writeBatch(db);
-    batch.update(doc(db, "employees", emp.id), { pinVersion });
-    if (key) {
-      batch.set(doc(db, "nameIndex", key), {
-        employeeId: emp.id,
-        hasPin: false,
-        pinVersion,
-        loginKey: deleteField()
-      }, { merge: true });
-    }
-    batch.delete(doc(db, "pinResetRequests", emp.id));
-    for (const old of startCodes.filter((c) => c.employeeId === emp.id && c.id !== code)) {
-      batch.delete(doc(db, "startCodes", old.id));
-    }
-    batch.set(doc(db, "startCodes", code), { employeeId: emp.id, pinVersion, createdAt, expiresAt, used: false });
+    addStartCodeOps(batch, emp, code, createdAt, expiresAt);
     await batch.commit();
   });
   if (ok) showStartCode({ name: emp.name, code, expiresAt: expiresAt.toDate().toISOString() });
+}
+
+// Voegt de uitgifte-writes voor één medewerker toe aan een batch; geeft het aantal writes terug.
+function addStartCodeOps(batch, emp, code, createdAt, expiresAt) {
+  const pinVersion = (Number(emp.pinVersion) || 0) + 1;
+  const key = nameIndexKey(emp.name);
+  let writes = 0;
+  batch.update(doc(db, "employees", emp.id), { pinVersion });
+  writes += 1;
+  if (key) {
+    batch.set(doc(db, "nameIndex", key), {
+      employeeId: emp.id,
+      hasPin: false,
+      pinVersion,
+      loginKey: deleteField()
+    }, { merge: true });
+    writes += 1;
+  }
+  batch.delete(doc(db, "pinResetRequests", emp.id));
+  writes += 1;
+  for (const old of startCodes.filter((c) => c.employeeId === emp.id && c.id !== code)) {
+    batch.delete(doc(db, "startCodes", old.id));
+    writes += 1;
+  }
+  batch.set(doc(db, "startCodes", code), { employeeId: emp.id, pinVersion, createdAt, expiresAt, used: false });
+  return writes + 1;
+}
+
+async function issueStartCodesForAllActive() {
+  const list = activeEmployees();
+  if (!list.length) {
+    showToast("Er zijn geen actieve medewerkers.");
+    return;
+  }
+  const confirmed = await confirmAction(
+    `Voor ${list.length} actieve ${list.length === 1 ? "medewerker" : "medewerkers"} een nieuwe startcode maken? Alle huidige pincodes en open startcodes vervallen. Iedereen moet daarna met de nieuwe code opnieuw een pincode instellen. Inactieve medewerkers krijgen geen code.`,
+    { title: "Startcodes voor iedereen", confirmText: "Startcodes maken", danger: true }
+  );
+  if (!confirmed) return;
+  const createdAt = Timestamp.now();
+  const expiresAt = Timestamp.fromMillis(createdAt.toMillis() + START_CODE_VALID_DAYS * 86400000);
+  const issued = [];
+  const ok = await safeWrite(async () => {
+    let batch = writeBatch(db);
+    let count = 0;
+    let pending = [];
+    for (const emp of list) {
+      const code = generateStartCode();
+      count += addStartCodeOps(batch, emp, code, createdAt, expiresAt);
+      pending.push({ name: emp.name, code });
+      if (count >= 400) {
+        await batch.commit();
+        issued.push(...pending);
+        pending = [];
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count) await batch.commit();
+    issued.push(...pending);
+  });
+  if (issued.length) showBulkStartCodes(issued, expiresAt.toDate().toISOString());
+  if (!ok && issued.length) showToast(`Niet alle codes zijn gemaakt (${issued.length} van ${list.length}).`);
+}
+
+function showBulkStartCodes(items, expiresAt) {
+  const dialog = document.getElementById("bulk-code-dialog");
+  if (!dialog) return;
+  document.getElementById("bulk-code-expiry").textContent = `Geldig tot ${formatDateTime(expiresAt)} · eenmalig per medewerker`;
+  const copy = async (text, btn) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = "Gekopieerd";
+    } catch {
+      showToast("Kopiëren lukte niet. Selecteer de code handmatig.");
+    }
+  };
+  const rows = items.map((item) => {
+    const formatted = formatStartCode(item.code);
+    const frag = dom`
+      <li class="bulk-code-row">
+        <span class="bulk-code-name">${item.name}</span>
+        <span class="bulk-code-code">${formatted}</span>
+        <button type="button" class="secondary">Kopiëren</button>
+      </li>`;
+    const btn = frag.querySelector("button");
+    btn.onclick = () => copy(`${item.name}: ${formatted}`, btn);
+    return frag;
+  });
+  document.getElementById("bulk-code-list").replaceChildren(...rows);
+  const allBtn = document.getElementById("bulk-code-copy-all");
+  allBtn.textContent = "Alles kopiëren";
+  allBtn.onclick = () => copy(items.map((i) => `${i.name}: ${formatStartCode(i.code)}`).join("\n"), allBtn);
+  document.getElementById("bulk-code-close").onclick = () => dialog.classList.add("hidden");
+  dialog.classList.remove("hidden");
 }
 
 function showStartCode({ name, code, expiresAt }) {
@@ -765,6 +845,8 @@ function setupUi() {
   document.getElementById("reassign-btn").onclick = reassignCurrentTask;
   document.getElementById("add-employee-form").onsubmit = addEmployee;
   document.getElementById("seed-employees-btn").onclick = () => seedEmployees();
+  const bulkBtn = document.getElementById("bulk-startcodes-btn");
+  if (bulkBtn) bulkBtn.onclick = () => issueStartCodesForAllActive();
   buildWeekdayPicker();
   document.getElementById("recurrence-start").value = localDateKey(new Date());
   document.addEventListener("visibilitychange", () => {
@@ -1788,21 +1870,22 @@ function employeeItem(emp) {
   const legacy = hasPin && !(entry && entry.loginKey);
   const open = openStartCodeFor(emp);
   let pinText = "Nog geen pincode";
-  if (hasPin) pinText = legacy ? "Pincode ingesteld (oude methode, zonder startcode)" : "Pincode ingesteld met startcode";
+  if (hasPin) pinText = legacy ? "Oude methode, zonder startcode: werkt niet meer" : "Pincode ingesteld met startcode";
   else if (open) pinText = "Wacht op pincode met startcode";
   const frag = dom`
-    <div class="employee-item">
+    <div class="${legacy && emp.active ? "employee-item employee-item--needs-code" : "employee-item"}">
       <div class="employee-top">
         <div>
           <div class="task-title">${emp.name}</div>
           <p class="${hasPin ? "employee-pin set" : "employee-pin"}">${pinText}</p>
+          ${legacy && emp.active ? dom`<p class="needs-code">Nieuwe startcode nodig</p>` : ""}
           ${open ? dom`<p class="employee-code">Open startcode · geldig tot ${formatDateTime(open.expiresAt)}</p>` : ""}
           ${!emp.active ? dom`<p class="employee-code muted">Inactief: inloggen geblokkeerd, geen startcode mogelijk</p>` : ""}
         </div>
         <span class="badge ${emp.active ? "open" : "paused"}">${emp.active ? "Actief" : "Inactief"}</span>
       </div>
       <div class="employee-actions">
-        ${emp.active ? dom`<button type="button" data-act="code" title="Startcode (7 dagen geldig, eenmalig)">${hasPin ? "Pincode resetten (startcode)" : "Startcode maken"}</button>` : ""}
+        ${emp.active ? dom`<button type="button" data-act="code" title="Startcode (7 dagen geldig, eenmalig)">${hasPin && !legacy ? "Pincode resetten (startcode)" : "Startcode maken"}</button>` : ""}
         ${open ? dom`<button type="button" class="secondary" data-act="show-code">Code tonen</button>` : ""}
         ${open ? dom`<button type="button" class="secondary" data-act="delete-code">Code verwijderen</button>` : ""}
         <button type="button" class="secondary" data-act="rename">Hernoemen</button>

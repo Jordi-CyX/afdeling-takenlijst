@@ -11,13 +11,13 @@
   <meta name="description" content="Zeiklijst Admin — beheer van de afdelingstakenlijst">
   <title>Zeiklijst Admin</title>
   <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
-  <link rel="manifest" href="manifest.webmanifest?v=19">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=19">
-  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=19">
-  <link rel="icon" href="favicon.ico?v=19" sizes="any">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=19">
-  <link rel="stylesheet" href="../styles.css?v=19">
-  <link rel="stylesheet" href="admin.css?v=19">
+  <link rel="manifest" href="manifest.webmanifest?v=20">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=20">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=20">
+  <link rel="icon" href="favicon.ico?v=20" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20">
+  <link rel="stylesheet" href="../styles.css?v=20">
+  <link rel="stylesheet" href="admin.css?v=20">
 </head>
 <body>
   <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
@@ -133,6 +133,10 @@
           <button type="button" id="seed-employees-btn" class="secondary">Standaardlijst vullen</button>
         </div>
       </form>
+      <div class="bulk-startcodes">
+        <button type="button" id="bulk-startcodes-btn">Startcodes maken voor alle actieve medewerkers</button>
+        <p class="pin-meta">Iedereen krijgt een nieuwe eenmalige code (7 dagen geldig). Oude pincodes werken daarna niet meer.</p>
+      </div>
       <div id="employee-list"></div>
     </section>
 
@@ -355,6 +359,19 @@
       </div>
     </div>
   </div>
+  <div id="bulk-code-dialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="bulk-code-title">
+    <div class="modal-content app-dialog-content code-dialog-content">
+      <h2 id="bulk-code-title">Startcodes</h2>
+      <p class="code-dialog-label">Startcode (7 dagen geldig, eenmalig)</p>
+      <p id="bulk-code-expiry" class="code-dialog-expiry"></p>
+      <ul id="bulk-code-list" class="bulk-code-list"></ul>
+      <p class="code-dialog-help">Geef elke code persoonlijk aan de juiste medewerker, niet in een groepsapp. Deze lijst zie je maar één keer volledig; een losse code kun je later nog tonen bij de medewerker.</p>
+      <div class="form-actions">
+        <button type="button" id="bulk-code-copy-all" class="secondary">Alles kopiëren</button>
+        <button type="button" id="bulk-code-close">Klaar</button>
+      </div>
+    </div>
+  </div>
   <div id="app-toast" class="app-toast hidden" role="status"></div>
 
   <div id="image-lightbox" class="lightbox hidden" role="dialog" aria-modal="true" aria-label="Vergrote foto">
@@ -362,6 +379,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=19"></script>
+  <script type="module" src="admin.js?v=20"></script>
 </body>
 </html>

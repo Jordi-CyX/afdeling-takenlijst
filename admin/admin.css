@@ -795,3 +795,60 @@ button.stat-card:active {
   color: var(--anthracite, #231F20);
   border-color: var(--border);
 }
+
+/* --- Optie A: oude accounts + bulk-startcodes --- */
+.needs-code {
+  display: inline-block;
+  margin: 0.35rem 0 0;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: var(--magenta, #C40070);
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.employee-item--needs-code { border-left: 4px solid var(--magenta, #C40070); }
+
+.bulk-startcodes {
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+#bulk-code-dialog { z-index: 1250; }
+
+.bulk-code-list {
+  list-style: none;
+  margin: 0.6rem 0 0.8rem;
+  padding: 0;
+  max-height: 55vh;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.bulk-code-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.bulk-code-name { font-weight: 700; overflow-wrap: anywhere; }
+
+.bulk-code-code {
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  background: var(--anthracite, #231F20);
+  color: var(--accent, #F99D27);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+.bulk-code-row button { padding: 0.35rem 0.6rem; font-size: 0.85rem; }
