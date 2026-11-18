@@ -32,6 +32,8 @@ Open de Admin-app en log in met e-mail en wachtwoord (standaard e-mail: `j.g_vdb
 - **Medewerkers** beheren (toevoegen, hernoemen, deactiveren). Bij hernoemen wordt `assigneeName` ook bijgewerkt op open/pending taken en herhaal-templates. De standaardlijst: Jane, Aart, Edwin, Daan, Reda, Akif, Finn, Tim, Guido, Renato, Alex. Toewijzen via een keuzelijst, plus **Allen** en niet-toegewezen
 - **Pincode**: meldingen als een medewerker de pincode is vergeten (badge in het menu, lijst op Dashboard en Medewerkers) met de knop **Pincode resetten** en een bevestigingsstap. Per medewerker zie je of er een pincode is ingesteld, en kun je handmatig resetten. Er is ook **Naamindex opbouwen** onder Data; ontbrekende indexregels worden bij het openen van de admin-app automatisch aangevuld.
 - Bij een nieuwe versie van de admin-app verschijnt de balk **Nieuwe versie beschikbaar, tik om te vernieuwen**.
+- **Aangemaakte taken**: taken die een medewerker zelf heeft aangemaakt (`adminReview: nieuw`) verschijnen op het Dashboard, met knoppen **Gezien** en **Afgehandeld**. In Taken staan ze gemarkeerd als “Door &lt;naam&gt; aangemaakt”. Een badge in het menu toont het aantal nieuwe items.
+- **Meldingen**: een eigen sectie in het menu met foutmeldingen uit de live-app (nieuw / in behandeling / opgelost), inclusief beschrijving, foto, naam, tijd, app-versie en toestel. Een menubadge toont het aantal nieuwe meldingen.
 - **Exporteer** / **Importeer** als back-up, en optioneel **Opschonen** van afgeronde taken ouder dan 90 dagen (na export-prompt en bevestiging)
 - Bij de eerste login: optioneel **Importeer lokale gegevens naar Firebase** als dit apparaat nog oude localStorage-data heeft
 
