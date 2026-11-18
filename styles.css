@@ -14,6 +14,14 @@
   src: url("fonts/protest-guerrilla.woff2") format("woff2");
 }
 
+@font-face {
+  font-family: "Rubik Distressed";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/rubik-distressed.woff2") format("woff2");
+}
+
 :root {
   --bg: #3A3C3E;
   --bg-card: #E8E6E3;
@@ -37,7 +45,7 @@
   --pending: #C40070;
   --radius: 14px;
   --shadow: 0 6px 18px rgba(35, 31, 32, 0.28);
-  --font-display: "Protest Guerrilla", Impact, "Arial Black", sans-serif;
+  --font-display: "Rubik Distressed", "Rubik Dirt", Impact, "Arial Black", sans-serif;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -49,7 +57,7 @@
 html, body { min-height: 100%; }
 
 body {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Arial, Helvetica, sans-serif;
   margin: 0;
   background: var(--bg);
   color: var(--text);
@@ -245,6 +253,13 @@ h2, h3 {
   margin: 0 0 0.9rem;
   font-size: 1.1rem;
   color: var(--anthracite);
+}
+.guest-app h2,
+.guest-app h3 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 1.15rem;
+  letter-spacing: 0.02em;
 }
 
 h3 { margin-top: 1.5rem; }

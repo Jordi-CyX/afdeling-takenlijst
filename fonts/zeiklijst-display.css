@@ -1,10 +1,14 @@
-/* Protest Guerrilla — SIL Open Font License 1.1 (see OFL-protest-guerrilla.txt)
-   Source: Google Fonts / https://github.com/octaviopardo/Protest
+/* Rubik Distressed — SIL Open Font License 1.1 (see OFL-rubik-distressed.txt)
+   Source: Google Fonts / The Rubik Filtered Project Authors
+   https://github.com/NaN-xyz/Rubik-Filtered
+   Closest freely redistributable (OFL) match to the Dirty Suburban
+   stamp-style specimen. Dirty Suburban itself is not licensed for
+   self-hosting in this repo.
    Use together with the HORNBACH CSS variables in ../styles.css */
 @font-face {
-  font-family: "Protest Guerrilla";
+  font-family: "Rubik Distressed";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("protest-guerrilla.woff2") format("woff2");
+  src: url("rubik-distressed.woff2") format("woff2");
 }
