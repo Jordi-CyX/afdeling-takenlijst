@@ -137,16 +137,23 @@ function renderTasks() {
 
 function taskItemHtml(task) {
   const location = (task.location || "").trim();
+  const assignee = (task.assigneeName || "").trim();
   const pendingMark = task.status === "pending"
     ? '<div class="badge-row"><span class="badge pending">Pending</span></div>'
     : "";
+  const assigneeBanner = assignee
+    ? `<div class="task-assignee">${escapeHtml(assignee)}</div>`
+    : "";
   return `
     <div class="task-item ${task.status}" role="button" tabindex="0" data-task-id="${escapeAttr(task.id)}">
-      <div>
-        <div class="task-title">${escapeHtml(task.title)}</div>
-        <div class="task-location${location ? "" : " hidden"}">${escapeHtml(location)}</div>
+      <div class="task-item-main">
+        <div>
+          <div class="task-title">${escapeHtml(task.title)}</div>
+          <div class="task-location${location ? "" : " hidden"}">${escapeHtml(location)}</div>
+        </div>
+        ${pendingMark}
       </div>
-      ${pendingMark}
+      ${assigneeBanner}
     </div>
   `;
 }
