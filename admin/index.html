@@ -12,10 +12,10 @@
   <title>Zeiklijst Admin</title>
   <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" type="image/png" href="icons/icon-192.png?v=13">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=13">
-  <link rel="stylesheet" href="../styles.css?v=13">
-  <link rel="stylesheet" href="admin.css?v=13">
+  <link rel="icon" type="image/png" href="icons/icon-192.png?v=14">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=14">
+  <link rel="stylesheet" href="../styles.css?v=14">
+  <link rel="stylesheet" href="admin.css?v=14">
 </head>
 <body>
   <header>
@@ -73,16 +73,20 @@
     <section id="section-dashboard" class="admin-section" data-section="dashboard">
       <h2>Dashboard</h2>
       <div class="stat-cards dashboard-stats">
-        <article class="stat-card">
+        <button type="button" class="stat-card" id="stat-open-card">
           <span class="stat-value" id="stat-open">0</span>
           <span class="stat-label">Openstaande taken</span>
-        </article>
-        <article class="stat-card stat-pending">
+        </button>
+        <button type="button" class="stat-card stat-pending" id="stat-pending-card">
           <span class="stat-value" id="stat-pending">0</span>
           <span class="stat-label">Pending</span>
-        </article>
+        </button>
       </div>
       <p class="stat-done-mini">Afgerond: <strong id="stat-done">0</strong></p>
+      <h3>Huidige verdeling</h3>
+      <div id="dashboard-workload" class="workload-list"></div>
+      <h3>Laatste pending</h3>
+      <div id="dashboard-pending"></div>
     </section>
 
     <section id="section-medewerkers" class="admin-section hidden" data-section="medewerkers">
@@ -102,11 +106,12 @@
 
     <section id="section-taken" class="admin-section hidden" data-section="taken">
       <h2>Taken</h2>
-      <h3 id="task-form-heading">Nieuwe taak toevoegen</h3>
+      <details id="task-form-panel">
+      <summary><span id="task-form-heading">Nieuwe taak</span></summary>
       <form id="add-task-form">
         <input type="text" id="title" placeholder="Titel" required autocomplete="off">
         <input type="text" id="location" placeholder="Locatie (bijv. Gang 12 of Buitenterrein)" autocomplete="off">
-        <textarea id="description" placeholder="Uitgebreide beschrijving" rows="4" required></textarea>
+        <textarea id="description" placeholder="Beschrijving (optioneel)" rows="4"></textarea>
         <label>
           Toegewezen aan (optioneel)
           <select id="assignee-select">
@@ -115,9 +120,10 @@
           </select>
         </label>
         <label class="file-label">
-          Foto's (optioneel)
+          Foto's (optioneel, max. 4)
           <input type="file" id="photos" accept="image/*" multiple>
         </label>
+        <p id="photo-note" class="section-intro hidden">Bestaande foto's blijven bewaard als je geen nieuwe kiest.</p>
         <label class="check-row">
           <input type="checkbox" id="is-recurring">
           Herhalende taak
@@ -153,6 +159,42 @@
           <button type="button" id="task-cancel-edit" class="secondary hidden">Annuleren</button>
         </div>
       </form>
+      </details>
+
+      <div class="task-toolbar">
+        <label class="task-search">
+          Zoeken
+          <input type="search" id="task-search" placeholder="Titel, locatie of beschrijving" autocomplete="off">
+        </label>
+        <div class="filter-group">
+          <span class="filter-label">Status</span>
+          <div class="filter-chips" id="filter-status" role="group" aria-label="Filter op status">
+            <button type="button" data-filter="all" aria-pressed="true">Alles</button>
+            <button type="button" data-filter="open">Open</button>
+            <button type="button" data-filter="pending">Pending</button>
+          </div>
+        </div>
+        <label>
+          Medewerker
+          <select id="filter-employee">
+            <option value="all">Iedereen</option>
+          </select>
+        </label>
+        <label>
+          Locatie
+          <select id="filter-location">
+            <option value="all">Alle locaties</option>
+          </select>
+        </label>
+        <div class="filter-group">
+          <span class="filter-label">Soort</span>
+          <div class="filter-chips" id="filter-recurring" role="group" aria-label="Filter op herhaling">
+            <button type="button" data-filter="all" aria-pressed="true">Alles</button>
+            <button type="button" data-filter="yes">Herhalend</button>
+            <button type="button" data-filter="no">Eenmalig</button>
+          </div>
+        </div>
+      </div>
 
       <h3>Terugkerende taken</h3>
       <div id="template-list"></div>
@@ -200,6 +242,11 @@
         <input type="file" id="import-file" accept="application/json,.json" hidden>
         <button type="button" id="import-btn" class="secondary">Importeer</button>
       </div>
+      <h3>Opschonen</h3>
+      <p class="section-intro">Verwijder afgeronde taken ouder dan 90 dagen. Exporteer eerst een back-up.</p>
+      <div class="form-actions">
+        <button type="button" id="cleanup-btn" class="secondary">Opschonen</button>
+      </div>
     </section>
   </main>
 
@@ -211,6 +258,7 @@
       <p id="modal-assignee"></p>
       <div id="modal-status"></div>
       <div id="modal-description"></div>
+      <div id="modal-rejections"></div>
       <div id="modal-photos"></div>
       <div id="reassign-row">
         <label>
@@ -223,6 +271,22 @@
     </div>
   </div>
 
-  <script type="module" src="admin.js?v=13"></script>
+  <div id="app-dialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+    <div class="modal-content app-dialog-content">
+      <h2 id="app-dialog-title">Bevestigen</h2>
+      <p id="app-dialog-message"></p>
+      <label id="app-dialog-input-wrap" class="hidden">
+        <span id="app-dialog-input-label">Reden</span>
+        <textarea id="app-dialog-input" rows="3"></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="button" id="app-dialog-cancel" class="secondary">Annuleren</button>
+        <button type="button" id="app-dialog-confirm">Bevestigen</button>
+      </div>
+    </div>
+  </div>
+  <div id="app-toast" class="app-toast hidden" role="status"></div>
+
+  <script type="module" src="admin.js?v=14"></script>
 </body>
 </html>

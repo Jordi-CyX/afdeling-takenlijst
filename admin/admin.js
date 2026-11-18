@@ -47,6 +47,7 @@ let templates = [];
 let employees = [];
 let currentTaskId = null;
 let editingTemplateId = null;
+let editingTaskId = null;
 let knownDate = localDateKey(new Date());
 let listenersStarted = false;
 let generating = false;
@@ -63,6 +64,74 @@ const SECTION_LABELS = {
   data: "Data"
 };
 let currentSection = "dashboard";
+let taskFilters = { q: "", status: "all", employee: "all", location: "all", recurring: "all" };
+let dialogResolve = null;
+let toastTimer = null;
+
+function writeErrorMessage(err) {
+  const code = String((err && (err.code || err.message)) || "").toLowerCase();
+  if (!navigator.onLine || code.includes("unavailable") || code.includes("network") || code.includes("offline")) {
+    return "Geen verbinding. Probeer het later opnieuw.";
+  }
+  if (code.includes("permission-denied") || code.includes("permission") || code.includes("insufficient")) {
+    return "Geen toestemming om dit te wijzigen.";
+  }
+  return (err && err.message) || "Opslaan mislukt.";
+}
+
+async function safeWrite(fn) {
+  try {
+    await fn();
+    return true;
+  } catch (err) {
+    showToast(writeErrorMessage(err), "error");
+    return false;
+  }
+}
+
+function showToast(message, type = "error") {
+  const el = document.getElementById("app-toast");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle("error", type === "error");
+  el.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), 4500);
+}
+
+function closeDialog(result) {
+  const dialog = document.getElementById("app-dialog");
+  if (dialog) dialog.classList.add("hidden");
+  const resolve = dialogResolve;
+  dialogResolve = null;
+  if (resolve) resolve(result || { ok: false });
+}
+
+function showDialog({ title, message, input = false, inputLabel = "Reden", inputPlaceholder = "", inputValue = "", confirmText = "Bevestigen", cancelText = "Annuleren", danger = false } = {}) {
+  if (dialogResolve) closeDialog({ ok: false });
+  return new Promise((resolve) => {
+    dialogResolve = resolve;
+    document.getElementById("app-dialog-title").textContent = title || "Bevestigen";
+    document.getElementById("app-dialog-message").textContent = message || "";
+    const wrap = document.getElementById("app-dialog-input-wrap");
+    const field = document.getElementById("app-dialog-input");
+    wrap.classList.toggle("hidden", !input);
+    document.getElementById("app-dialog-input-label").textContent = inputLabel;
+    field.value = inputValue || "";
+    field.placeholder = inputPlaceholder;
+    const confirmBtn = document.getElementById("app-dialog-confirm");
+    confirmBtn.textContent = confirmText;
+    confirmBtn.classList.toggle("danger", Boolean(danger));
+    document.getElementById("app-dialog-cancel").textContent = cancelText;
+    document.getElementById("app-dialog").classList.remove("hidden");
+    setTimeout(() => (input ? field : confirmBtn).focus(), 30);
+  });
+}
+
+async function confirmAction(message, { title = "Bevestigen", confirmText = "Bevestigen", danger = false } = {}) {
+  const result = await showDialog({ title, message, confirmText, danger });
+  return Boolean(result.ok);
+}
 
 function weekdayNames(values) {
   const map = new Map(WEEKDAYS.map((day) => [day.value, day.long]));
@@ -131,8 +200,57 @@ function setupUi() {
     if (nav && !nav.contains(event.target)) closeNav();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeNav();
+    if (event.key !== "Escape") return;
+    if (dialogResolve) {
+      closeDialog({ ok: false });
+      return;
+    }
+    if (!document.getElementById("modal").classList.contains("hidden")) {
+      closeModal();
+      return;
+    }
+    closeNav();
   });
+  document.getElementById("stat-open-card").onclick = () => showSection("taken", true, { filters: { status: "open" } });
+  document.getElementById("stat-pending-card").onclick = () => showSection("controle");
+  document.getElementById("task-search").oninput = (event) => {
+    taskFilters.q = event.target.value;
+    renderTasks();
+    renderCompleted();
+  };
+  document.querySelectorAll("#filter-status [data-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      taskFilters.status = btn.dataset.filter;
+      syncFilterUi();
+      renderTasks();
+    };
+  });
+  document.querySelectorAll("#filter-recurring [data-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      taskFilters.recurring = btn.dataset.filter;
+      syncFilterUi();
+      renderTasks();
+      renderCompleted();
+    };
+  });
+  document.getElementById("filter-employee").onchange = (event) => {
+    taskFilters.employee = event.target.value;
+    renderTasks();
+    renderCompleted();
+  };
+  document.getElementById("filter-location").onchange = (event) => {
+    taskFilters.location = event.target.value;
+    renderTasks();
+    renderCompleted();
+  };
+  document.getElementById("app-dialog-cancel").onclick = () => closeDialog({ ok: false });
+  document.getElementById("app-dialog-confirm").onclick = () => {
+    closeDialog({ ok: true, value: document.getElementById("app-dialog-input").value });
+  };
+  document.getElementById("app-dialog").onclick = (event) => {
+    if (event.target.id === "app-dialog") closeDialog({ ok: false });
+  };
+  document.getElementById("cleanup-btn").onclick = cleanupOldCompleted;
   document.getElementById("workflow-period").onchange = renderWorkflow;
   document.getElementById("export-btn").onclick = exportData;
   document.getElementById("import-btn").onclick = () => document.getElementById("import-file").click();
@@ -256,7 +374,7 @@ function readRecurrenceFromForm() {
   if (type === "weekdays") {
     recurrence.weekdays = selectedWeekdays();
     if (!recurrence.weekdays.length) {
-      alert("Kies minstens één weekdag.");
+      showToast("Kies minstens één weekdag.");
       return null;
     }
   }
@@ -264,7 +382,7 @@ function readRecurrenceFromForm() {
     recurrence.date = document.getElementById("recurrence-date").value;
     recurrence.monthly = document.getElementById("recurrence-monthly").checked;
     if (!recurrence.date) {
-      alert("Kies een datum voor de herhaling.");
+      showToast("Kies een datum voor de herhaling.");
       return null;
     }
   }
@@ -276,17 +394,38 @@ async function submitTaskForm(event) {
   const title = document.getElementById("title").value.trim();
   const description = document.getElementById("description").value.trim();
   const location = document.getElementById("location").value.trim();
-  if (!title || !description) return;
+  if (!title) {
+    showToast("Vul een titel in.");
+    document.getElementById("title").focus();
+    return;
+  }
   const assignee = assigneeFromSelect(document.getElementById("assignee-select"));
   let photos = [];
   try {
     photos = await readCompressedPhotos(document.getElementById("photos").files);
   } catch (err) {
-    alert(err.message || "Foto's konden niet worden verwerkt.");
+    showToast(err.message || "Foto's konden niet worden verwerkt.");
     return;
   }
 
   try {
+    if (editingTaskId) {
+      const task = tasks.find((item) => item.id === editingTaskId);
+      if (!task) return;
+      const nextPhotos = photos.length ? photos : (task.photos || []);
+      const payload = {
+        title,
+        description,
+        location,
+        ...assignee,
+        photos: nextPhotos
+      };
+      assertDocSize({ ...serializeTask({ ...task, ...payload }), ...payload });
+      const ok = await safeWrite(() => updateDoc(doc(db, "tasks", editingTaskId), payload));
+      if (ok) resetTaskForm();
+      return;
+    }
+
     if (editingTemplateId) {
       const template = templates.find((item) => item.id === editingTemplateId);
       if (!template) return;
@@ -302,8 +441,8 @@ async function submitTaskForm(event) {
         recurrence
       });
       assertDocSize(payload);
-      await updateDoc(doc(db, "recurring", editingTemplateId), payload);
-      resetTaskForm();
+      const ok = await safeWrite(() => updateDoc(doc(db, "recurring", editingTemplateId), payload));
+      if (ok) resetTaskForm();
       return;
     }
 
@@ -321,8 +460,8 @@ async function submitTaskForm(event) {
         createdAt: new Date().toISOString()
       });
       assertDocSize(payload);
-      await addDoc(collection(db, "recurring"), payload);
-      resetTaskForm();
+      const ok = await safeWrite(() => addDoc(collection(db, "recurring"), payload));
+      if (ok) resetTaskForm();
       return;
     }
 
@@ -336,23 +475,57 @@ async function submitTaskForm(event) {
       createdAt: new Date().toISOString()
     });
     assertDocSize(payload);
-    await addDoc(collection(db, "tasks"), payload);
-    resetTaskForm();
+    const ok = await safeWrite(() => addDoc(collection(db, "tasks"), payload));
+    if (ok) resetTaskForm();
   } catch (err) {
-    alert(err.message || "Opslaan mislukt.");
+    showToast(err.message || "Opslaan mislukt.");
   }
 }
 
 function resetTaskForm() {
   editingTemplateId = null;
+  editingTaskId = null;
   document.getElementById("add-task-form").reset();
   document.getElementById("recurrence-start").value = localDateKey(new Date());
   setSelectedWeekdays([]);
-  document.getElementById("task-form-heading").textContent = "Nieuwe taak toevoegen";
+  document.getElementById("task-form-heading").textContent = "Nieuwe taak";
   document.getElementById("task-submit-btn").textContent = "Taak toevoegen";
   document.getElementById("task-cancel-edit").classList.add("hidden");
   document.getElementById("is-recurring").disabled = false;
+  document.getElementById("photo-note").classList.add("hidden");
   updateRecurrenceVisibility();
+}
+
+function openTaskForm() {
+  document.getElementById("task-form-panel").open = true;
+}
+
+function startEditTask(id) {
+  const task = tasks.find((item) => item.id === id);
+  if (!task) return;
+  editingTaskId = id;
+  editingTemplateId = null;
+  closeModal();
+  showSection("taken");
+  document.getElementById("title").value = task.title || "";
+  document.getElementById("location").value = task.location || "";
+  document.getElementById("description").value = task.description || "";
+  document.getElementById("assignee-select").value = task.assigneeId || "";
+  document.getElementById("is-recurring").checked = false;
+  document.getElementById("is-recurring").disabled = true;
+  document.getElementById("photos").value = "";
+  const count = (task.photos || []).length;
+  const note = document.getElementById("photo-note");
+  note.textContent = count
+    ? `${count} foto('s) aanwezig. Een nieuwe keuze vervangt ze (max. 4).`
+    : "Nog geen foto's. Je kunt er nu maximaal 4 toevoegen.";
+  note.classList.remove("hidden");
+  document.getElementById("task-form-heading").textContent = "Taak bewerken";
+  document.getElementById("task-submit-btn").textContent = "Opslaan";
+  document.getElementById("task-cancel-edit").classList.remove("hidden");
+  updateRecurrenceVisibility();
+  openTaskForm();
+  document.getElementById("title").focus();
 }
 
 function startEditTemplate(id) {
@@ -371,23 +544,34 @@ function startEditTemplate(id) {
   document.getElementById("recurrence-date").value = recurrence.date || "";
   document.getElementById("recurrence-monthly").checked = Boolean(recurrence.monthly);
   setSelectedWeekdays(recurrence.weekdays || []);
+  editingTaskId = null;
+  document.getElementById("photos").value = "";
+  const count = (template.photos || []).length;
+  const note = document.getElementById("photo-note");
+  note.textContent = count
+    ? `${count} foto('s) aanwezig. Een nieuwe keuze vervangt ze (max. 4).`
+    : "Nog geen foto's. Je kunt er nu maximaal 4 toevoegen.";
+  note.classList.remove("hidden");
   document.getElementById("task-form-heading").textContent = "Terugkerende taak bewerken";
   document.getElementById("task-submit-btn").textContent = "Opslaan";
   document.getElementById("task-cancel-edit").classList.remove("hidden");
   updateRecurrenceVisibility();
+  openTaskForm();
   document.getElementById("title").focus();
 }
 
 async function pauseTemplate(id) {
   const template = templates.find((item) => item.id === id);
   if (!template) return;
-  await updateDoc(doc(db, "recurring", id), { paused: !template.paused });
+  await safeWrite(() => updateDoc(doc(db, "recurring", id), { paused: !template.paused }));
 }
 
 async function deleteTemplate(id) {
-  if (!confirm("Deze terugkerende taak verwijderen? Bestaande taken blijven bewaard.")) return;
-  await deleteDoc(doc(db, "recurring", id));
-  if (editingTemplateId === id) resetTaskForm();
+  const ok = await confirmAction("Deze terugkerende taak verwijderen? Bestaande taken blijven bewaard.", { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
+  if (!ok) return;
+  if (await safeWrite(() => deleteDoc(doc(db, "recurring", id)))) {
+    if (editingTemplateId === id) resetTaskForm();
+  }
 }
 
 function describeRecurrence(template) {
@@ -434,10 +618,14 @@ function closeNav() {
   document.getElementById("nav-toggle").setAttribute("aria-expanded", "false");
 }
 
-function showSection(name, persist = true) {
+function showSection(name, persist = true, options = {}) {
   const section = SECTIONS.includes(name) ? name : "dashboard";
   currentSection = section;
   if (persist) localStorage.setItem(SECTION_KEY, section);
+  if (options.filters) {
+    taskFilters = { ...taskFilters, ...options.filters };
+    syncFilterUi();
+  }
   document.querySelectorAll(".admin-section").forEach((el) => {
     el.classList.toggle("hidden", el.dataset.section !== section);
   });
@@ -447,6 +635,7 @@ function showSection(name, persist = true) {
     else btn.removeAttribute("aria-current");
   });
   closeNav();
+  if (section === "taken" && options.filters) renderTasks();
 }
 
 function pendingCount() {
@@ -465,6 +654,7 @@ function updateNavBadge() {
 
 function renderAll() {
   fillAssigneeSelects();
+  fillTaskFilters();
   renderDashboard();
   renderTasks();
   renderCompleted();
@@ -475,10 +665,71 @@ function renderAll() {
   updateNavBadge();
 }
 
+function currentWorkloadGroups() {
+  const groups = new Map();
+  const ensure = (key, label) => {
+    if (!groups.has(key)) groups.set(key, { key, label, open: 0, pending: 0 });
+    return groups.get(key);
+  };
+  ensure("ALLEN", "Allen");
+  ensure("UNASSIGNED", "Niet toegewezen");
+  for (const emp of employees.filter((e) => e.active)) {
+    ensure(emp.id || emp.name, emp.name || emp.id);
+  }
+  for (const task of tasks) {
+    if (task.status !== "open" && task.status !== "pending") continue;
+    let group;
+    if (task.assigneeId === "ALLEN" || task.assigneeName === "Allen") group = ensure("ALLEN", "Allen");
+    else if (!(task.assigneeName || "").trim() && !task.assigneeId) group = ensure("UNASSIGNED", "Niet toegewezen");
+    else if (task.assigneeId && employees.some((e) => e.id === task.assigneeId)) {
+      const emp = employees.find((e) => e.id === task.assigneeId);
+      group = ensure(emp.id, emp.name || emp.id);
+    } else {
+      const ident = workflowGroup(task);
+      group = ensure(ident.key, ident.label);
+    }
+    if (task.status === "pending") group.pending += 1;
+    else group.open += 1;
+  }
+  return [...groups.values()].sort((a, b) => {
+    if (a.key === "ALLEN") return -1;
+    if (b.key === "ALLEN") return 1;
+    if (a.key === "UNASSIGNED") return 1;
+    if (b.key === "UNASSIGNED") return -1;
+    return a.label.localeCompare(b.label, "nl");
+  });
+}
+
 function renderDashboard() {
   document.getElementById("stat-open").textContent = tasks.filter((t) => t.status === "open").length;
   document.getElementById("stat-pending").textContent = tasks.filter((t) => t.status === "pending").length;
   document.getElementById("stat-done").textContent = tasks.filter((t) => t.status === "afgerond").length;
+  const workload = document.getElementById("dashboard-workload");
+  const rows = currentWorkloadGroups();
+  if (!rows.length) {
+    workload.innerHTML = '<p class="empty-state">Nog geen taken om te verdelen.</p>';
+  } else {
+    workload.innerHTML = rows.map((g) => `
+      <button type="button" class="workload-row" data-workload="${escapeAttr(g.key)}">
+        <span>${escapeHtml(g.label)}</span>
+        <span class="counts">${g.open} open · ${g.pending} pending</span>
+      </button>
+    `).join("");
+    workload.querySelectorAll("[data-workload]").forEach((btn) => {
+      btn.onclick = () => showSection("taken", true, { filters: { status: "all", employee: btn.dataset.workload } });
+    });
+  }
+  const pendingBox = document.getElementById("dashboard-pending");
+  const latest = tasks
+    .filter((task) => task.status === "pending")
+    .sort((a, b) => String(b.pendingAt || b.createdAt || "").localeCompare(String(a.pendingAt || a.createdAt || "")))
+    .slice(0, 5);
+  if (!latest.length) {
+    pendingBox.innerHTML = '<p class="empty-state">Geen pending taken.</p>';
+    return;
+  }
+  pendingBox.innerHTML = latest.map(taskItemHtml).join("");
+  bindTaskItems(pendingBox);
 }
 
 function workflowGroup(task) {
@@ -527,18 +778,32 @@ function renderWorkflow() {
   const start = periodStart(period);
   const groups = new Map();
   const ensure = (key, label) => {
-    if (!groups.has(key)) groups.set(key, { key, label, completed: 0, rejected: 0 });
+    if (!groups.has(key)) groups.set(key, { key, label, completed: 0, rejected: 0, open: 0, pending: 0 });
     return groups.get(key);
   };
   ensure("ALLEN", "Allen");
+  ensure("UNASSIGNED", "Niet toegewezen");
   for (const emp of employees.filter((e) => e.active)) {
     ensure(emp.name || emp.id, emp.name || emp.id);
   }
+  const tickers = new Map();
+  const ensureTicker = (name) => {
+    if (!tickers.has(name)) tickers.set(name, { name, pending: 0, completed: 0 });
+    return tickers.get(name);
+  };
   for (const task of tasks) {
     const group = ensure(workflowGroup(task).key, workflowGroup(task).label);
+    if (task.status === "open") group.open += 1;
+    if (task.status === "pending") group.pending += 1;
     if (task.status === "afgerond" && inPeriod(task.completedAt, start)) group.completed += 1;
     for (const at of rejectionTimes(task)) {
       if (inPeriod(at, start)) group.rejected += 1;
+    }
+    const ticker = (task.pendingBy || "").trim();
+    if (ticker) {
+      const entry = ensureTicker(ticker);
+      if (task.status === "pending") entry.pending += 1;
+      if (task.status === "afgerond" && inPeriod(task.completedAt, start)) entry.completed += 1;
     }
   }
   const items = [...groups.values()].sort((a, b) => {
@@ -552,10 +817,19 @@ function renderWorkflow() {
     list.innerHTML = '<p class="empty-state">Nog geen workflowgegevens.</p>';
     return;
   }
+  const tickerItems = [...tickers.values()].sort((a, b) => a.name.localeCompare(b.name, "nl"));
   list.innerHTML = items.map((g) => `
     <article class="workflow-card">
       <h3>${escapeHtml(g.label)}</h3>
-      <div class="workflow-metrics">
+      <div class="workflow-metrics wide">
+        <div class="workflow-metric">
+          <span class="value">${g.open}</span>
+          <span class="label">Open</span>
+        </div>
+        <div class="workflow-metric">
+          <span class="value">${g.pending}</span>
+          <span class="label">Pending</span>
+        </div>
         <div class="workflow-metric">
           <span class="value">${g.completed}</span>
           <span class="label">Afgerond</span>
@@ -566,7 +840,24 @@ function renderWorkflow() {
         </div>
       </div>
     </article>
-  `).join("");
+  `).join("") + (tickerItems.length ? `
+    <h3 class="workflow-tickers">Afgevinkt door</h3>
+    ${tickerItems.map((g) => `
+      <article class="workflow-card">
+        <h3>${escapeHtml(g.name)}</h3>
+        <div class="workflow-metrics">
+          <div class="workflow-metric">
+            <span class="value">${g.pending}</span>
+            <span class="label">Nu pending</span>
+          </div>
+          <div class="workflow-metric">
+            <span class="value">${g.completed}</span>
+            <span class="label">Afgerond in periode</span>
+          </div>
+        </div>
+      </article>
+    `).join("")}
+  ` : "");
 }
 
 function renderControle() {
@@ -654,13 +945,91 @@ function bindTaskItems(container) {
   });
 }
 
+function taskMatchesFilters(task, includeCompleted = false) {
+  if (!includeCompleted && task.status === "afgerond") return false;
+  if (includeCompleted && task.status !== "afgerond") return false;
+  const status = taskFilters.status || "all";
+  if (!includeCompleted && status !== "all" && task.status !== status) return false;
+  const q = (taskFilters.q || "").trim().toLowerCase();
+  if (q) {
+    const hay = `${task.title || ""} ${task.location || ""} ${task.description || ""} ${task.assigneeName || ""}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  const employee = taskFilters.employee || "all";
+  if (employee !== "all") {
+    if (employee === "ALLEN") {
+      if (!(task.assigneeId === "ALLEN" || task.assigneeName === "Allen")) return false;
+    } else if (employee === "UNASSIGNED" || employee === "") {
+      const unassigned = !(task.assigneeName || "").trim() && !task.assigneeId;
+      if (!unassigned) return false;
+    } else if (task.assigneeId !== employee && (task.assigneeName || "") !== employee) {
+      return false;
+    }
+  }
+  const location = taskFilters.location || "all";
+  if (location !== "all") {
+    const loc = (task.location || "").trim();
+    if (location === "__none__") {
+      if (loc) return false;
+    } else if (loc !== location) return false;
+  }
+  const recurring = taskFilters.recurring || "all";
+  if (recurring === "yes" && !isRecurring(task)) return false;
+  if (recurring === "no" && isRecurring(task)) return false;
+  return true;
+}
+
+function fillTaskFilters() {
+  const empSelect = document.getElementById("filter-employee");
+  if (!empSelect) return;
+  const previous = taskFilters.employee || "all";
+  const options = [
+    `<option value="all">Iedereen</option>`,
+    `<option value="ALLEN">Allen</option>`,
+    `<option value="UNASSIGNED">Niet toegewezen</option>`,
+    ...employees.filter((e) => e.active).map((e) => `<option value="${escapeAttr(e.id)}">${escapeHtml(e.name)}</option>`)
+  ];
+  empSelect.innerHTML = options.join("");
+  if ([...empSelect.options].some((o) => o.value === previous)) empSelect.value = previous;
+  else empSelect.value = "all";
+  taskFilters.employee = empSelect.value;
+
+  const locSelect = document.getElementById("filter-location");
+  const locations = [...new Set(tasks.map((task) => (task.location || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "nl"));
+  const prevLoc = taskFilters.location || "all";
+  locSelect.innerHTML = [
+    `<option value="all">Alle locaties</option>`,
+    `<option value="__none__">Geen locatie</option>`,
+    ...locations.map((loc) => `<option value="${escapeAttr(loc)}">${escapeHtml(loc)}</option>`)
+  ].join("");
+  if ([...locSelect.options].some((o) => o.value === prevLoc)) locSelect.value = prevLoc;
+  else locSelect.value = "all";
+  taskFilters.location = locSelect.value;
+  syncFilterUi();
+}
+
+function syncFilterUi() {
+  const search = document.getElementById("task-search");
+  if (search && search.value !== (taskFilters.q || "")) search.value = taskFilters.q || "";
+  document.querySelectorAll("#filter-status [data-filter]").forEach((btn) => {
+    btn.setAttribute("aria-pressed", btn.dataset.filter === (taskFilters.status || "all") ? "true" : "false");
+  });
+  document.querySelectorAll("#filter-recurring [data-filter]").forEach((btn) => {
+    btn.setAttribute("aria-pressed", btn.dataset.filter === (taskFilters.recurring || "all") ? "true" : "false");
+  });
+  const empSelect = document.getElementById("filter-employee");
+  if (empSelect && [...empSelect.options].some((o) => o.value === taskFilters.employee)) empSelect.value = taskFilters.employee;
+  const locSelect = document.getElementById("filter-location");
+  if (locSelect && [...locSelect.options].some((o) => o.value === taskFilters.location)) locSelect.value = taskFilters.location;
+}
+
 function renderTasks() {
   const list = document.getElementById("task-list");
   const active = tasks
-    .filter((task) => task.status !== "afgerond")
+    .filter((task) => taskMatchesFilters(task, false))
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   if (!active.length) {
-    list.innerHTML = '<p class="empty-state">Geen openstaande taken.</p>';
+    list.innerHTML = '<p class="empty-state">Geen taken die aan de filters voldoen.</p>';
     return;
   }
   list.innerHTML = active.map(taskItemHtml).join("");
@@ -670,7 +1039,7 @@ function renderTasks() {
 function renderCompleted() {
   const list = document.getElementById("completed-list");
   const done = tasks
-    .filter((task) => task.status === "afgerond")
+    .filter((task) => taskMatchesFilters(task, true))
     .sort((a, b) => String(b.completedAt || b.createdAt || "").localeCompare(String(a.completedAt || a.createdAt || "")));
   document.getElementById("completed-count").textContent = String(done.length);
   if (!done.length) {
@@ -755,12 +1124,12 @@ async function addEmployee(event) {
   const name = document.getElementById("employee-name").value.trim();
   if (!name) return;
   const id = employeeSlug(name);
-  await setDoc(doc(db, "employees", id), {
+  const ok = await safeWrite(() => setDoc(doc(db, "employees", id), {
     name,
     active: true,
     createdAt: new Date().toISOString()
-  }, { merge: true });
-  document.getElementById("employee-name").value = "";
+  }, { merge: true }));
+  if (ok) document.getElementById("employee-name").value = "";
 }
 
 async function seedEmployees() {
@@ -772,28 +1141,65 @@ async function seedEmployees() {
     if (existing) continue;
     batch.set(doc(db, "employees", id), { name, active: true, createdAt: now }, { merge: true });
   }
-  await batch.commit();
+  await safeWrite(() => batch.commit());
 }
 
 async function renameEmployee(id) {
   const emp = employees.find((e) => e.id === id);
   if (!emp) return;
-  const name = prompt("Nieuwe naam:", emp.name);
-  if (!name || !name.trim() || name.trim() === emp.name) return;
-  await updateDoc(doc(db, "employees", id), { name: name.trim() });
+  const result = await showDialog({
+    title: "Medewerker hernoemen",
+    message: `Huidige naam: ${emp.name}`,
+    input: true,
+    inputLabel: "Nieuwe naam",
+    inputPlaceholder: emp.name,
+    inputValue: emp.name,
+    confirmText: "Opslaan"
+  });
+  const name = (result.ok ? result.value : "").trim();
+  if (!name || name === emp.name) {
+    if (result.ok && !name) showToast("Vul een naam in.");
+    return;
+  }
+  const ok = await safeWrite(async () => {
+    let batch = writeBatch(db);
+    let count = 0;
+    const add = async (ref, data) => {
+      batch.update(ref, data);
+      count += 1;
+      if (count >= 400) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    };
+    await add(doc(db, "employees", id), { name });
+    for (const task of tasks) {
+      if (task.assigneeId !== id) continue;
+      if (task.status !== "open" && task.status !== "pending") continue;
+      await add(doc(db, "tasks", task.id), { assigneeName: name });
+    }
+    for (const template of templates) {
+      if (template.assigneeId !== id) continue;
+      await add(doc(db, "recurring", template.id), { assigneeName: name });
+    }
+    if (count) await batch.commit();
+  });
+  if (ok) showToast("Naam bijgewerkt op medewerker, open taken en herhalingen.", "ok");
 }
 
 async function toggleEmployee(id) {
   const emp = employees.find((e) => e.id === id);
   if (!emp) return;
-  await updateDoc(doc(db, "employees", id), { active: !emp.active });
+  await safeWrite(() => updateDoc(doc(db, "employees", id), { active: !emp.active }));
 }
 
 async function removeEmployee(id) {
   const emp = employees.find((e) => e.id === id);
   if (!emp) return;
-  if (!confirm(`Medewerker ${emp.name} verwijderen? Bestaande taken blijven bewaard.`)) return;
-  await deleteDoc(doc(db, "employees", id));
+  const ok = await confirmAction(`Medewerker ${emp.name} verwijderen? Bestaande taken blijven bewaard.`, { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
+  if (!ok) return;
+  await safeWrite(() => deleteDoc(doc(db, "employees", id)));
 }
 
 function openTask(id) {
@@ -808,6 +1214,9 @@ function openTask(id) {
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
   const statusBadges = [`<span class="badge ${task.status}">${task.status === "open" ? "Open" : task.status === "pending" ? "Pending" : "Afgerond"}</span>`];
   if (isRecurring(task)) statusBadges.push('<span class="badge recurring">Herhalend</span>');
+  if (task.rejectedCount || task.lastRejectedAt || (Array.isArray(task.rejections) && task.rejections.length)) {
+    statusBadges.push('<span class="badge paused">Afgewezen</span>');
+  }
   document.getElementById("modal-status").innerHTML = statusBadges.join("");
   const extra = [];
   if (task.createdAt) extra.push(`Aangemaakt op ${escapeHtml(formatDateTime(task.createdAt))}`);
@@ -818,6 +1227,8 @@ function openTask(id) {
   document.getElementById("modal-description").innerHTML =
     `<p>${escapeHtml(task.description || "").replace(/\n/g, "<br>")}</p>` +
     (extra.length ? `<div class="task-meta">${extra.join("<br>")}</div>` : "");
+  const historyEl = document.getElementById("modal-rejections");
+  historyEl.innerHTML = rejectionHistoryHtml(task);
   const photos = (task.photos || []).filter((src) => typeof src === "string" && src.startsWith("data:image"));
   document.getElementById("modal-photos").innerHTML = photos.map((src) => `<img src="${src}" alt="Foto bij taak">`).join("");
   fillAssigneeSelects();
@@ -825,6 +1236,9 @@ function openTask(id) {
 
   const actions = document.getElementById("modal-actions");
   actions.innerHTML = "";
+  if (task.status === "open" || task.status === "pending") {
+    actions.innerHTML += `<button type="button" class="secondary" data-action="edit">Bewerken</button>`;
+  }
   if (task.status === "open") {
     actions.innerHTML += `<button type="button" class="success" data-action="pending">Markeer als gedaan</button>`;
   }
@@ -832,16 +1246,47 @@ function openTask(id) {
     actions.innerHTML += `<button type="button" class="success" data-action="approve">Goedkeuren</button>`;
     actions.innerHTML += `<button type="button" class="secondary" data-action="reject">Afwijzen</button>`;
   }
+  if (task.status === "afgerond") {
+    actions.innerHTML += `<button type="button" class="secondary" data-action="reopen">Terugzetten naar open</button>`;
+  }
   actions.innerHTML += `<button type="button" class="danger" data-action="delete">Verwijderen</button>`;
+  const editBtn = actions.querySelector('[data-action="edit"]');
   const pendingBtn = actions.querySelector('[data-action="pending"]');
   const approveBtn = actions.querySelector('[data-action="approve"]');
   const rejectBtn = actions.querySelector('[data-action="reject"]');
+  const reopenBtn = actions.querySelector('[data-action="reopen"]');
   const deleteBtn = actions.querySelector('[data-action="delete"]');
+  if (editBtn) editBtn.onclick = () => startEditTask(task.id);
   if (pendingBtn) pendingBtn.onclick = () => markPending(task.id);
   if (approveBtn) approveBtn.onclick = () => approveTask(task.id);
   if (rejectBtn) rejectBtn.onclick = () => rejectTask(task.id);
+  if (reopenBtn) reopenBtn.onclick = () => reopenTask(task.id);
   if (deleteBtn) deleteBtn.onclick = () => deleteTask(task.id);
   document.getElementById("modal").classList.remove("hidden");
+}
+
+function rejectionHistoryHtml(task) {
+  const items = Array.isArray(task.rejections) ? task.rejections.filter(Boolean).map((item) => ({
+    at: item.at || "",
+    by: item.by || "",
+    reason: typeof item.reason === "string" ? item.reason : ""
+  })) : [];
+  if (!items.length && (task.lastRejectedAt || task.lastRejectionReason)) {
+    items.push({ at: task.lastRejectedAt || "", by: "", reason: task.lastRejectionReason || "" });
+  }
+  if (!items.length) return "";
+  items.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+  return `<div class="rejection-history">
+    <h3>Afwijzingen</h3>
+    <ul>${items.map((item) => {
+      const reason = (item.reason || "").trim();
+      const meta = [item.at ? formatDateTime(item.at) : "", item.by].filter(Boolean).join(" · ");
+      return `<li>
+        ${meta ? `<div class="task-meta">${escapeHtml(meta)}</div>` : ""}
+        <p>${reason ? escapeHtml(reason) : "Geen reden opgegeven"}</p>
+      </li>`;
+    }).join("")}</ul>
+  </div>`;
 }
 
 function closeModal() {
@@ -852,42 +1297,72 @@ function closeModal() {
 async function markPending(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "open") return;
-  await updateDoc(doc(db, "tasks", id), {
+  await safeWrite(() => updateDoc(doc(db, "tasks", id), {
     status: "pending",
     pendingAt: new Date().toISOString(),
     pendingBy: null
-  });
+  }));
 }
 
 async function approveTask(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "pending") return;
-  await updateDoc(doc(db, "tasks", id), {
+  const confirmed = await confirmAction(`Taak “${task.title}” goedkeuren en als afgerond markeren?`, { title: "Goedkeuren", confirmText: "Goedkeuren" });
+  if (!confirmed) return;
+  const ok = await safeWrite(() => updateDoc(doc(db, "tasks", id), {
     status: "afgerond",
     completedAt: new Date().toISOString()
-  });
-  closeModal();
+  }));
+  if (ok) closeModal();
 }
 
 async function rejectTask(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "pending") return;
+  const result = await showDialog({
+    title: "Afwijzen",
+    message: `Taak “${task.title}” afwijzen? De taak gaat terug naar open. Een korte reden is sterk aangeraden.`,
+    input: true,
+    inputLabel: "Reden (optioneel, sterk aangeraden)",
+    inputPlaceholder: "Bijvoorbeeld: nog niet klaar, foto ontbreekt…",
+    confirmText: "Afwijzen",
+    danger: true
+  });
+  if (!result.ok) return;
+  const reason = (result.value || "").trim();
   const at = new Date().toISOString();
   const by = (auth.currentUser && auth.currentUser.email) || "Admin";
-  await updateDoc(doc(db, "tasks", id), {
+  const ok = await safeWrite(() => updateDoc(doc(db, "tasks", id), {
     status: "open",
     pendingAt: null,
     pendingBy: null,
     rejectedCount: increment(1),
     lastRejectedAt: at,
-    rejections: arrayUnion({ at, by })
-  });
+    lastRejectionReason: reason,
+    rejections: arrayUnion({ at, by, reason })
+  }));
+  if (ok) closeModal();
+}
+
+async function reopenTask(id) {
+  const task = tasks.find((item) => item.id === id);
+  if (!task || task.status !== "afgerond") return;
+  const confirmed = await confirmAction(`Taak “${task.title}” terugzetten naar open?`, { title: "Terugzetten", confirmText: "Terugzetten naar open" });
+  if (!confirmed) return;
+  const ok = await safeWrite(() => updateDoc(doc(db, "tasks", id), {
+    status: "open",
+    completedAt: null,
+    pendingAt: null,
+    pendingBy: null
+  }));
+  if (ok) closeModal();
 }
 
 async function deleteTask(id) {
-  if (!confirm("Taak definitief verwijderen?")) return;
-  await deleteDoc(doc(db, "tasks", id));
-  closeModal();
+  const confirmed = await confirmAction("Taak definitief verwijderen?", { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
+  if (!confirmed) return;
+  const ok = await safeWrite(() => deleteDoc(doc(db, "tasks", id)));
+  if (ok) closeModal();
 }
 
 async function reassignCurrentTask() {
@@ -895,7 +1370,52 @@ async function reassignCurrentTask() {
   const task = tasks.find((item) => item.id === currentTaskId);
   if (!task) return;
   const assignee = assigneeFromSelect(document.getElementById("reassign-select"));
-  await updateDoc(doc(db, "tasks", currentTaskId), assignee);
+  await safeWrite(() => updateDoc(doc(db, "tasks", currentTaskId), assignee));
+}
+
+function oldCompletedTasks() {
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  return tasks.filter((task) => {
+    if (task.status !== "afgerond" || !task.completedAt) return false;
+    const at = new Date(task.completedAt).getTime();
+    return !Number.isNaN(at) && at < cutoff;
+  });
+}
+
+async function cleanupOldCompleted() {
+  const old = oldCompletedTasks();
+  if (!old.length) {
+    showToast("Geen afgeronde taken ouder dan 90 dagen.", "ok");
+    return;
+  }
+  const first = await showDialog({
+    title: "Opschonen",
+    message: `Er staan ${old.length} afgeronde taken ouder dan 90 dagen. Exporteer eerst een back-up voordat je ze verwijdert.`,
+    confirmText: "Exporteer back-up",
+    cancelText: "Annuleren"
+  });
+  if (!first.ok) return;
+  exportData();
+  const confirmed = await confirmAction(
+    `${old.length} afgeronde taken ouder dan 90 dagen definitief verwijderen? Dit kan niet ongedaan worden gemaakt.`,
+    { title: "Definitief opschonen", confirmText: "Opschonen", danger: true }
+  );
+  if (!confirmed) return;
+  const ok = await safeWrite(async () => {
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const task of old) {
+      batch.delete(doc(db, "tasks", task.id));
+      count += 1;
+      if (count >= 400) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count) await batch.commit();
+  });
+  if (ok) showToast(`${old.length} oude taken verwijderd.`, "ok");
 }
 
 function loadLocalLegacy() {
@@ -917,10 +1437,11 @@ function offerMigrationIfNeeded() {
 
 async function migrateLocalToFirebase() {
   const { localTasks, localTemplates } = loadLocalLegacy();
-  await writeAll(localTemplates, localTasks);
+  const ok = await safeWrite(() => writeAll(localTemplates, localTasks));
+  if (!ok) return;
   localStorage.setItem(STORAGE_MIGRATED, "1");
   document.getElementById("migration-banner").classList.add("hidden");
-  alert("Lokale gegevens zijn geïmporteerd naar Firebase.");
+  showToast("Lokale gegevens zijn geïmporteerd naar Firebase.", "ok");
 }
 
 async function writeAll(tpls, taskList) {
@@ -946,10 +1467,11 @@ async function writeAll(tpls, taskList) {
       ? `${task.recurringId}_${task.occurrenceDate}`
       : (task.id || doc(collection(db, "tasks")).id);
     const payload = serializeTask(task);
-    if (task.rejectedCount || (Array.isArray(task.rejections) && task.rejections.length) || task.lastRejectedAt) {
+    if (task.rejectedCount || (Array.isArray(task.rejections) && task.rejections.length) || task.lastRejectedAt || task.lastRejectionReason) {
       payload.rejectedCount = task.rejectedCount || 0;
       payload.rejections = Array.isArray(task.rejections) ? task.rejections : [];
       payload.lastRejectedAt = task.lastRejectedAt || null;
+      payload.lastRejectionReason = task.lastRejectionReason || "";
     }
     await add(doc(db, "tasks", id), payload);
   }
@@ -1006,9 +1528,9 @@ async function importData(event) {
         }
         await batch.commit();
       }
-      alert("Data geïmporteerd");
+      showToast("Data geïmporteerd.", "ok");
     } catch (err) {
-      alert(err.message || "Ongeldig bestand");
+      showToast(err.message || "Ongeldig bestand");
     }
   };
   reader.readAsText(file);
