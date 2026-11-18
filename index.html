@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Takenlijst Afdeling</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Takenlijst Afdeling</h1>
+    <div id="auth-section">
+      <button id="admin-btn">Admin login</button>
+    </div>
+    <div id="admin-controls" class="hidden">
+      <span>Admin modus</span>
+      <button id="logout-btn">Uitloggen</button>
+      <button id="export-btn">Exporteer</button>
+      <input type="file" id="import-file" accept=".json" hidden>
+      <button id="import-btn">Importeer</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Admin: nieuwe taak formulier -->
+    <section id="add-task-section" class="hidden">
+      <h2>Nieuwe taak toevoegen</h2>
+      <form id="add-task-form">
+        <input type="text" id="title" placeholder="Titel" required>
+        <textarea id="description" placeholder="Uitgebreide beschrijving" rows="4" required></textarea>
+        <input type="text" id="assignee" placeholder="Toegewezen aan">
+        <label>Foto's (optioneel):
+          <input type="file" id="photos" accept="image/*" multiple>
+        </label>
+        <button type="submit">Taak toevoegen</button>
+      </form>
+    </section>
+
+    <!-- Takenlijst -->
+    <section>
+      <h2>Openstaande taken</h2>
+      <div id="task-list"></div>
+    </section>
+  </main>
+
+  <!-- Detail modal -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <h2 id="modal-title"></h2>
+      <p id="modal-assignee"></p>
+      <div id="modal-status"></div>
+      <div id="modal-description"></div>
+      <div id="modal-photos"></div>
+      <div id="modal-actions"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
