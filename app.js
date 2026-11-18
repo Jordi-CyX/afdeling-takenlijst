@@ -1,4 +1,14 @@
-const ADMIN_PASSWORD = "admin123"; // Pas dit aan!
+// Alleen een PBKDF2-hash van het admin-wachtwoord staat hier, niet het wachtwoord zelf.
+const ADMIN_SALT = "88b0401bc4e016166e5abf5597a60f80";
+const ADMIN_HASH = "0440fad32c490307cf21f9c35d2bd8df4084af2e05e0abf91d266cae38a00df0";
+
+async function hashPassword(pwd) {
+  const enc = new TextEncoder();
+  const salt = new Uint8Array(ADMIN_SALT.match(/../g).map(b => parseInt(b, 16)));
+  const key = await crypto.subtle.importKey("raw", enc.encode(pwd), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" }, key, 256);
+  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
 
 let isAdmin = false;
 let tasks = JSON.parse(localStorage.getItem("takenlijst") || "[]");
@@ -17,9 +27,9 @@ function init() {
 }
 
 function setupListeners() {
-  adminBtn.onclick = () => {
+  adminBtn.onclick = async () => {
     const pwd = prompt("Admin wachtwoord:");
-    if (pwd === ADMIN_PASSWORD) setAdmin(true);
+    if (pwd !== null && (await hashPassword(pwd)) === ADMIN_HASH) setAdmin(true);
     else if (pwd !== null) alert("Verkeerd wachtwoord");
   };
 

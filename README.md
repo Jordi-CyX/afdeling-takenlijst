@@ -14,7 +14,7 @@ Eenvoudige live takenlijst voor retail afdeling.
 ## Gebruik
 
 1. Open `index.html` in de browser
-2. Klik op "Admin login" (standaard wachtwoord: `admin123`)
+2. Klik op "Admin login" en voer het admin-wachtwoord in
 3. Voeg taken toe
 4. Deel de link (GitHub Pages) met je team
 
@@ -29,7 +29,7 @@ Voor teamgebruik:
 ## Aanpassen
 
 In `app.js`:
-- `ADMIN_PASSWORD` → verander het wachtwoord
+- `ADMIN_SALT` en `ADMIN_HASH` → het wachtwoord staat alleen als PBKDF2-hash in de code
 
 ## Op GitHub Pages
 
