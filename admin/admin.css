@@ -218,15 +218,6 @@ header h1 {
   }
 }
 
-#section-dashboard {
-  padding-top: 0;
-  overflow: hidden;
-}
-
-#section-dashboard .dashboard-banner {
-  margin: 0 -1.2rem 1.15rem;
-}
-
 .controle-item {
   margin-bottom: 0.9rem;
 }

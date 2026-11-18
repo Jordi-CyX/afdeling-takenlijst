@@ -1,4 +1,4 @@
-const CACHE_NAME = "zeiklijst-admin-v10";
+const CACHE_NAME = "zeiklijst-admin-v11";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
@@ -9,7 +9,6 @@ const ASSETS = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
-  "./logo-admin.png",
   "../styles.css",
   "../shared.js",
   "../firebase-init.js",
