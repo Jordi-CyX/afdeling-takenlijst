@@ -1,17 +1,32 @@
-const CACHE_NAME = "zeiklijst-v4";
+const CACHE_NAME = "zeiklijst-v5";
+const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./shared.js",
+  "./firebase-init.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
-  "./fonts/black-ops-one.woff2",
-  "./logo.svg"
+  "./fonts/rubik-dirt.woff2",
+  "./logo.png",
+  "./logo.svg",
+  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-app.js`,
+  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-auth.js`,
+  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-firestore.js`
 ];
 const FONT_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
+
+function isFirebaseSdk(url) {
+  return url.hostname === "www.gstatic.com" && url.pathname.startsWith("/firebasejs/");
+}
+
+function isAdminPath(url) {
+  return url.pathname.includes("/admin/");
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -32,7 +47,10 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
 
-  if (FONT_HOSTS.has(url.hostname)) {
+  // Do not control or cache the Admin PWA.
+  if (isAdminPath(url)) return;
+
+  if (isFirebaseSdk(url) || FONT_HOSTS.has(url.hostname)) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);
       const cached = await cache.match(request);
@@ -54,9 +72,7 @@ self.addEventListener("fetch", (event) => {
     const cache = await caches.open(CACHE_NAME);
     try {
       const response = await fetch(request);
-      if (response && response.ok) {
-        cache.put(request, response.clone());
-      }
+      if (response && response.ok) cache.put(request, response.clone());
       return response;
     } catch {
       const cached = await cache.match(request, { ignoreSearch: true });
