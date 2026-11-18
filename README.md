@@ -31,7 +31,7 @@ Open de Admin-app en log in met e-mail en wachtwoord (standaard e-mail: `j.g_vdb
 - **Workflow**: per persoon de huidige open/pending-last, plus afgerond en afgekeurd in de gekozen periode, en optioneel wie taken heeft afgevinkt (`pendingBy`)
 - **Terugkerende taken** aanmaken, bewerken, pauzeren en verwijderen
 - **Medewerkers** beheren (toevoegen, hernoemen, deactiveren). Bij hernoemen wordt `assigneeName` ook bijgewerkt op open/pending taken en herhaal-templates. De standaardlijst: Jane, Aart, Edwin, Daan, Reda, Akif, Finn, Tim, Guido, Renato, Alex. Toewijzen via een keuzelijst, plus **Allen** en niet-toegewezen
-- **Pincode**: meldingen als een medewerker de pincode is vergeten (badge in het menu, lijst op Dashboard en Medewerkers) met de knop **Pincode resetten** en een bevestigingsstap. Per medewerker zie je of er een pincode is ingesteld, en kun je handmatig resetten. Er is ook **Naamindex opbouwen** onder Data; ontbrekende indexregels worden bij het openen van de admin-app automatisch aangevuld.
+- **Startcodes en pincode**: per medewerker de knop **Startcode maken** (of **Pincode resetten (startcode)** als er al een pincode is). Je krijgt een eenmalige code van 10 tekens (getoond als `XXXXX-XXXXX`, 7 dagen geldig) met een kopieerknop en de vervaldatum. Geef die persoonlijk aan de medewerker. Bij elke medewerker zie je of er een open startcode is (met vervaldatum), je kunt de code opnieuw tonen of verwijderen. Inactieve medewerkers kunnen geen startcode krijgen. Een verzoek "Pincode vergeten" (badge in het menu, lijst op Dashboard en Medewerkers) geeft zelf geen toegang: je maakt er een startcode bij of wist het verzoek. Er is ook **Naamindex opbouwen** onder Data.
 - Bij een nieuwe versie van de admin-app verschijnt de balk **Nieuwe versie beschikbaar, tik om te vernieuwen**.
 - **Aangemaakte taken**: taken die een medewerker zelf heeft aangemaakt (`adminReview: nieuw`) verschijnen op het Dashboard, met knoppen **Gezien** en **Afgehandeld**. In Taken staan ze gemarkeerd als “Door &lt;naam&gt; aangemaakt”. Een badge in het menu toont het aantal nieuwe items.
 - **Meldingen**: een eigen sectie in het menu met foutmeldingen uit de live-app (nieuw / in behandeling / opgelost), inclusief beschrijving, foto, naam, tijd, app-versie en toestel. Een menubadge toont het aantal nieuwe meldingen.
@@ -62,9 +62,18 @@ Foto's worden verkleind (max. ca. 1000 px, JPEG-kwaliteit 0,6, maximaal 4 stuks)
 
 Authenticatie:
 
-- Medewerkers worden automatisch anoniem aangemeld
-- Admin logt in met e-mail/wachtwoord
-- Beveiligingsregels staan in `firestore.rules` (publiceer die in de Firebase-console voordat je deze versie naar `main` zet)
+- Admin logt in met e-mail/wachtwoord en is in de regels vastgezet op UID. Het alleen-lezen account van ZL Assistent (vaste UID) mag alleen `tasks` en `employees` lezen.
+- Medewerkers worden eerst anoniem aangemeld (voor het opzoeken van hun naam in `nameIndex`).
+- **Eerste pincode en na een reset** gaat alleen met een eenmalige **startcode** van de admin:
+  - `startCodes/{CODE}` (doc-id = code, 10 tekens uit A-Z en 2-9 zonder 0, O, 1, I en L) = `{employeeId, pinVersion, createdAt, expiresAt (createdAt + 7 dagen), used:false}`. Admin maakt en verwijdert; iedere ingelogde gebruiker mag één code `get`ten, alleen admin mag de lijst lezen.
+  - Code maken is één batch: `employees.pinVersion + 1`, `nameIndex` krijgt `hasPin:false` en de nieuwe `pinVersion` (en `loginKey` wordt gewist), het resetverzoek en oudere codes van die medewerker worden verwijderd, en de nieuwe code wordt aangemaakt.
+  - De medewerker maakt een Firebase-account met e-mail `emp-{employeeId}-v{pinVersion}-{code in kleine letters}@zeiklijst.app` (helper `startCodeEmail` in `shared.js`) en wachtwoord `zl-{pin}-{employeeId}` (`staffPassword`).
+  - Claim = één batch van drie writes: `staffAccounts/{uid} = {employeeId, pinVersion, startCode}`, `startCodes/{code}` krijgt `{used:true, usedBy: uid, usedAt: serverTimestamp()}`, en `nameIndex/{naam}` krijgt `{hasPin:true, loginKey: code in kleine letters}`. De regels eisen dat de code bestaat, ongebruikt en niet verlopen is, bij deze medewerker en `pinVersion` hoort, dat de medewerker actief is en dat het auth-e-mailadres klopt.
+- **Inloggen**: naam → `nameIndex` (`employeeId`, `hasPin`, `pinVersion`, `loginKey`) → e-mail opbouwen → inloggen met pincode.
+- **Inactieve medewerkers** (`active:false`) worden door de regels geweigerd, ook met een bestaand account.
+- **Pincode vergeten** maakt alleen een verzoek in `pinResetRequests`; dat geeft geen toegang.
+- **Foto's** moeten `data:image/(jpeg|png|webp);base64,...` zijn (gecontroleerd in de regels en bij het tonen). De admin-app bouwt alle gebruikersinhoud op met `textContent`/`img.src`, nooit met `innerHTML`.
+- Beveiligingsregels staan in `firestore.rules`. Een commit verandert de live regels niet: publiceer ze in de Firebase-console.
 
 ## Technisch
 
