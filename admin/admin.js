@@ -275,6 +275,7 @@ async function submitTaskForm(event) {
   event.preventDefault();
   const title = document.getElementById("title").value.trim();
   const description = document.getElementById("description").value.trim();
+  const location = document.getElementById("location").value.trim();
   if (!title || !description) return;
   const assignee = assigneeFromSelect(document.getElementById("assignee-select"));
   let photos = [];
@@ -295,6 +296,7 @@ async function submitTaskForm(event) {
         ...template,
         title,
         description,
+        location,
         ...assignee,
         photos: photos.length ? photos : template.photos,
         recurrence
@@ -311,6 +313,7 @@ async function submitTaskForm(event) {
       const payload = serializeTemplate({
         title,
         description,
+        location,
         ...assignee,
         photos,
         recurrence,
@@ -326,6 +329,7 @@ async function submitTaskForm(event) {
     const payload = serializeTask({
       title,
       description,
+      location,
       ...assignee,
       photos,
       status: "open",
@@ -356,6 +360,7 @@ function startEditTemplate(id) {
   if (!template) return;
   editingTemplateId = id;
   document.getElementById("title").value = template.title || "";
+  document.getElementById("location").value = template.location || "";
   document.getElementById("description").value = template.description || "";
   document.getElementById("assignee-select").value = template.assigneeId || "";
   document.getElementById("is-recurring").checked = true;
@@ -602,25 +607,22 @@ function isRecurring(task) {
   return Boolean(task.recurringId);
 }
 
+function locationLabel(item) {
+  const location = (item && item.location || "").trim();
+  if (!location) return "";
+  return `<div class="task-location">${escapeHtml(location)}</div>`;
+}
+
 function taskItemHtml(task) {
   const badges = [
     `<span class="badge ${task.status}">${task.status === "open" ? "Open" : task.status === "pending" ? "Pending" : "Afgerond"}</span>`
   ];
   if (isRecurring(task)) badges.unshift('<span class="badge recurring">Herhalend</span>');
-  const completed = task.status === "afgerond" && task.completedAt
-    ? `<div class="task-meta">Goedgekeurd op ${escapeHtml(formatDateTime(task.completedAt))}</div>`
-    : "";
-  const ticked = task.pendingAt
-    ? `<div class="task-meta">Afgevinkt op ${escapeHtml(formatDateTime(task.pendingAt))}${task.pendingBy ? " door " + escapeHtml(task.pendingBy) : ""}</div>`
-    : "";
   return `
     <div class="task-item ${task.status}" role="button" tabindex="0" data-task-id="${escapeAttr(task.id)}">
       <div>
         <div class="task-title">${escapeHtml(task.title)}</div>
-        <div class="task-meta">Toegewezen aan: ${escapeHtml(assigneeLabel(task))}</div>
-        ${task.createdAt ? `<div class="task-meta">Aangemaakt op ${escapeHtml(formatDateTime(task.createdAt))}</div>` : ""}
-        ${ticked}
-        ${completed}
+        ${locationLabel(task)}
       </div>
       <div class="badge-row">${badges.join("")}</div>
     </div>
@@ -678,6 +680,7 @@ function renderTemplates() {
       <div class="template-top">
         <div>
           <div class="task-title">${escapeHtml(template.title)}</div>
+          ${locationLabel(template)}
           <div class="task-meta">
             ${escapeHtml(assigneeLabel(template))}
             · ${escapeHtml(describeRecurrence(template))}
@@ -786,6 +789,10 @@ function openTask(id) {
   if (!task) return;
   currentTaskId = id;
   document.getElementById("modal-title").textContent = task.title;
+  const locationEl = document.getElementById("modal-location");
+  const location = (task.location || "").trim();
+  locationEl.textContent = location;
+  locationEl.classList.toggle("hidden", !location);
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
   const statusBadges = [`<span class="badge ${task.status}">${task.status === "open" ? "Open" : task.status === "pending" ? "Pending" : "Afgerond"}</span>`];
   if (isRecurring(task)) statusBadges.push('<span class="badge recurring">Herhalend</span>');

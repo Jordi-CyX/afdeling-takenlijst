@@ -14,13 +14,17 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="../styles.css?v=7">
-  <link rel="stylesheet" href="admin.css?v=7">
+  <link rel="stylesheet" href="../styles.css?v=8">
+  <link rel="stylesheet" href="admin.css?v=8">
 </head>
 <body>
   <header>
     <div class="header-inner">
       <h1>Zeiklijst Admin</h1>
+      <div class="header-actions">
+        <a href="../" class="app-switch" aria-label="Naar Zeiklijst Live">
+          <img src="../icons/icon-192.png" alt="" width="32" height="32">
+        </a>
       <div id="admin-controls" class="hidden">
         <nav class="admin-nav" id="admin-nav">
           <button type="button" id="nav-toggle" class="nav-toggle" aria-expanded="false" aria-haspopup="true" aria-controls="nav-menu">
@@ -43,6 +47,7 @@
             <li role="none"><button type="button" role="menuitem" id="logout-btn">Uitloggen</button></li>
           </ul>
         </nav>
+        </div>
       </div>
     </div>
   </header>
@@ -103,6 +108,7 @@
       <h3 id="task-form-heading">Nieuwe taak toevoegen</h3>
       <form id="add-task-form">
         <input type="text" id="title" placeholder="Titel" required autocomplete="off">
+        <input type="text" id="location" placeholder="Locatie (bijv. Gang 12 of Buitenterrein)" autocomplete="off">
         <textarea id="description" placeholder="Uitgebreide beschrijving" rows="4" required></textarea>
         <label>
           Toegewezen aan (optioneel)
@@ -204,6 +210,7 @@
     <div class="modal-content">
       <button type="button" class="close" id="modal-close" aria-label="Sluiten">&times;</button>
       <h2 id="modal-title"></h2>
+      <p id="modal-location" class="task-location hidden"></p>
       <p id="modal-assignee"></p>
       <div id="modal-status"></div>
       <div id="modal-description"></div>
@@ -219,6 +226,6 @@
     </div>
   </div>
 
-  <script type="module" src="admin.js?v=7"></script>
+  <script type="module" src="admin.js?v=8"></script>
 </body>
 </html>

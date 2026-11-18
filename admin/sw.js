@@ -1,4 +1,4 @@
-const CACHE_NAME = "zeiklijst-admin-v7";
+const CACHE_NAME = "zeiklijst-admin-v8";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
@@ -14,6 +14,7 @@ const ASSETS = [
   "../shared.js",
   "../firebase-init.js",
   "../fonts/rubik-dirt.woff2",
+  "../icons/icon-192.png",
   `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-app.js`,
   `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-auth.js`,
   `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-firestore.js`

@@ -209,7 +209,8 @@ export function normalizeTask(id, data) {
     occurrenceDate: d.occurrenceDate || d.instanceDate || null,
     rejectedCount: Number(d.rejectedCount) || 0,
     rejections: Array.isArray(d.rejections) ? d.rejections : [],
-    lastRejectedAt: toIso(d.lastRejectedAt)
+    lastRejectedAt: toIso(d.lastRejectedAt),
+    location: typeof d.location === "string" ? d.location : ""
   };
 }
 
@@ -238,7 +239,8 @@ export function normalizeTemplate(id, data) {
     photos: Array.isArray(d.photos) ? d.photos : [],
     recurrence,
     paused: Boolean(d.paused),
-    createdAt: toIso(d.createdAt || d.created) || ""
+    createdAt: toIso(d.createdAt || d.created) || "",
+    location: typeof d.location === "string" ? d.location : ""
   };
 }
 
@@ -265,7 +267,8 @@ export function serializeTask(task) {
     completedAt: task.completedAt || null,
     recurringId: task.recurringId || null,
     occurrenceDate: task.occurrenceDate || null,
-    photos: Array.isArray(task.photos) ? task.photos : []
+    photos: Array.isArray(task.photos) ? task.photos : [],
+    location: task.location || ""
   };
 }
 
@@ -276,6 +279,7 @@ export function serializeTemplate(template) {
     assigneeId: template.assigneeId || "",
     assigneeName: template.assigneeName || "",
     photos: Array.isArray(template.photos) ? template.photos : [],
+    location: template.location || "",
     recurrence: template.recurrence || { type: "daily", startDate: localDateKey(new Date()) },
     paused: Boolean(template.paused),
     createdAt: template.createdAt || new Date().toISOString()
@@ -342,6 +346,7 @@ export async function generateDueInstances(templates, tasks) {
       assigneeId: template.assigneeId || "",
       assigneeName: template.assigneeName || "",
       photos: template.photos || [],
+      location: template.location || "",
       status: "open",
       createdAt: new Date().toISOString(),
       pendingAt: null,

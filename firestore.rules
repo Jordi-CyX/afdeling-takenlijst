@@ -18,6 +18,7 @@ service cloud.firestore {
         && task.description == tpl.description
         && task.assigneeId == (("assigneeId" in tpl) ? tpl.assigneeId : "")
         && task.assigneeName == (("assigneeName" in tpl) ? tpl.assigneeName : "")
+        && (("location" in task) ? task.location : "") == (("location" in tpl) ? tpl.location : "")
         && task.photos == (("photos" in tpl) ? tpl.photos : []);
     }
 
@@ -41,7 +42,8 @@ service cloud.firestore {
         "completedAt",
         "recurringId",
         "occurrenceDate",
-        "photos"
+        "photos",
+        "location"
       ]);
     }
 
@@ -62,6 +64,7 @@ service cloud.firestore {
         && (!("completedAt" in data) || data.completedAt == null)
         && data.photos is list
         && data.photos.size() <= 4
+        && (!("location" in data) || data.location is string)
         && exists(recPath)
         && isActiveTemplate(get(recPath).data)
         && templateMatches(data, get(recPath).data);
