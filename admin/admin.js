@@ -618,8 +618,8 @@ function assigneeBanner(task) {
   const isAllen = task.assigneeId === "ALLEN" || name.toLowerCase() === "allen";
   const unassigned = !isAllen && !name;
   const label = unassigned ? "Niet toegewezen" : (isAllen ? "Allen" : name);
-  const cls = unassigned ? " task-assignee-banner--muted" : "";
-  return `<div class="task-assignee-banner${cls}">${escapeHtml(label)}</div>`;
+  const cls = unassigned ? " task-assignee--muted" : "";
+  return `<div class="task-assignee${cls}">${escapeHtml(label)}</div>`;
 }
 
 function taskItemHtml(task) {
