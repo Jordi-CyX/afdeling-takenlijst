@@ -2,6 +2,7 @@
 // - Claimen van een medewerker kan alleen nog met een eenmalige startcode van de admin
 //   (startCodes/{code}, 7 dagen geldig). Naam typen alleen geeft geen toegang meer.
 // - Inactieve medewerkers (active == false) worden geweigerd (isValidStaff).
+// - Optie A: accounts zonder startCode (oude methode) worden voor alles geweigerd (isValidStaff).
 // - Een pincode-resetverzoek blijft alleen een verzoek; het geeft geen toegang.
 // - Foto's moeten data:image/(jpeg|png|webp);base64,... zijn.
 rules_version = '2';
@@ -51,6 +52,7 @@ service cloud.firestore {
       return isSignedIn()
         && exists(staffAccountPath())
         && staffAccount().employeeId is string
+        && isStartCodeFormat(staffAccount().get("startCode", null))
         && exists(/databases/$(database)/documents/employees/$(staffEmployeeId()))
         && isActiveEmployee(staffEmployee())
         && employeePinVersion(staffEmployee()) == staffAccount().pinVersion;
