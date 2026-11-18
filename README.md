@@ -19,7 +19,7 @@ Er is geen admin-login in de medewerkers-app.
 
 ## Voor admin
 
-Open de Admin-app en log in met e-mail en wachtwoord (standaard e-mail: `j.g_vdbos@outlook.com`). De app gebruikt de HORNBACH-kleuren (`#3A3C3E`, accent `#F99D27`) en het lettertype **Rubik Distressed** (OFL) voor de kop in de menubanner.
+Open de Admin-app en log in met e-mail en wachtwoord (het e-mailadres staat standaard ingevuld vanuit `admin/admin-config.js`). De app gebruikt de HORNBACH-kleuren (`#3A3C3E`, accent `#F99D27`) en het lettertype **Rubik Distressed** (OFL) voor de kop in de menubanner.
 
 - **Dashboard**: aanklikbare totalen voor open (naar Taken, gefilterd) en pending (naar Controle), de *actuele* open/pending-verdeling per medewerker (inclusief Allen en Niet toegewezen), en een korte lijst van de laatste pending taken. Afgerond blijft als kleiner cijfer staan.
 - Taken **toevoegen** en **bewerken** (titel verplicht; locatie, beschrijving en foto's optioneel, max. 4 gecomprimeerde foto's). Het formulier "Nieuwe taak" staat standaard ingeklapt. Zoeken en filteren kan op status, medewerker, locatie en herhalend.
@@ -62,7 +62,7 @@ Foto's worden verkleind (max. ca. 1000 px, JPEG-kwaliteit 0,6, maximaal 4 stuks)
 
 Authenticatie:
 
-- Admin logt in met e-mail/wachtwoord en is in de regels vastgezet op UID. Het alleen-lezen account van ZL Assistent (vaste UID) mag alleen `tasks` en `employees` lezen.
+- Admin logt in met e-mail/wachtwoord en is in de regels vastgezet op UID. Het admin-e-mailadres staat alleen in `admin/admin-config.js` (niet in `firebase-init.js`, dat ook de medewerkers-app laadt). Bij een afwijzing wordt "Beheerder" opgeslagen, niet het e-mailadres. Het alleen-lezen account van ZL Assistent (vaste UID) mag alleen `tasks` en `employees` lezen.
 - Medewerkers worden eerst anoniem aangemeld (voor het opzoeken van hun naam in `nameIndex`).
 - **Eerste pincode en na een reset** gaat alleen met een eenmalige **startcode** van de admin:
   - `startCodes/{CODE}` (doc-id = code, 10 tekens uit A-Z en 2-9 zonder 0, O, 1, I en L) = `{employeeId, pinVersion, createdAt, expiresAt (createdAt + 7 dagen), used:false}`. Admin maakt en verwijdert; iedere ingelogde gebruiker mag één code `get`ten, alleen admin mag de lijst lezen.
@@ -70,7 +70,7 @@ Authenticatie:
   - De medewerker maakt een Firebase-account met e-mail `emp-{employeeId}-v{pinVersion}-{code in kleine letters}@zeiklijst.app` (helper `startCodeEmail` in `shared.js`) en wachtwoord `zl-{pin}-{employeeId}` (`staffPassword`).
   - Claim = één batch van drie writes: `staffAccounts/{uid} = {employeeId, pinVersion, startCode}`, `startCodes/{code}` krijgt `{used:true, usedBy: uid, usedAt: serverTimestamp()}`, en `nameIndex/{naam}` krijgt `{hasPin:true, loginKey: code in kleine letters}`. De regels eisen dat de code bestaat, ongebruikt en niet verlopen is, bij deze medewerker en `pinVersion` hoort, dat de medewerker actief is en dat het auth-e-mailadres klopt.
 - **Inloggen**: naam → `nameIndex` (`employeeId`, `hasPin`, `pinVersion`, `loginKey`) → e-mail opbouwen → inloggen met pincode.
-- **Inactieve medewerkers** (`active:false`) worden door de regels geweigerd, ook met een bestaand account.
+- **Inactieve medewerkers** (`active:false`) worden door de regels geweigerd, ook met een bestaand account. Alleen hun eigen `employees/{id}` mogen ze nog `get`ten (met geldig staffAccount: startCode en pinVersion kloppen), zodat de app "Je account is niet actief" kan tonen.
 - **Oude accounts** (aangemaakt vóór de startcodes, dus zonder `startCode` in `staffAccounts`) worden door de regels voor alles geweigerd. Zo'n medewerker staat in de admin-app als **Nieuwe startcode nodig**. De oude login zonder `loginKey` (`staffEmail`) werkt niet meer.
 - **Pincode vergeten** maakt alleen een verzoek in `pinResetRequests`; dat geeft geen toegang.
 - **Foto's** moeten `data:image/(jpeg|png|webp);base64,...` zijn (gecontroleerd in de regels en bij het tonen). De admin-app bouwt alle gebruikersinhoud op met `textContent`/`img.src`, nooit met `innerHTML`.
