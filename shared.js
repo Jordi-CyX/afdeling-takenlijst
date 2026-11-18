@@ -136,6 +136,61 @@ export function staffPassword(pin, employeeId) {
   return `zl-${pin}-${employeeId}`;
 }
 
+// --- Startcodes (eenmalig, 7 dagen geldig) -------------------------------
+// Alfabet: A-Z en 2-9 zonder 0, O, 1, I en L (31 tekens).
+export const START_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export const START_CODE_LENGTH = 10;
+export const START_CODE_VALID_DAYS = 7;
+
+// Voor lookup/doc-id: hoofdletters, alleen geldige tekens (streepjes/spaties weg).
+export function normalizeStartCode(s) {
+  return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+// Voor weergave: XXXXX-XXXXX.
+export function formatStartCode(s) {
+  const code = normalizeStartCode(s);
+  if (code.length <= 5) return code;
+  return `${code.slice(0, 5)}-${code.slice(5)}`;
+}
+
+export function isValidStartCode(s) {
+  const code = normalizeStartCode(s);
+  if (code.length !== START_CODE_LENGTH) return false;
+  for (const ch of code) {
+    if (!START_CODE_ALPHABET.includes(ch)) return false;
+  }
+  return true;
+}
+
+// Cryptografisch willekeurig, zonder modulo-bias (rejection sampling).
+export function generateStartCode() {
+  const n = START_CODE_ALPHABET.length;
+  const limit = 256 - (256 % n);
+  let out = "";
+  const buf = new Uint8Array(32);
+  while (out.length < START_CODE_LENGTH) {
+    crypto.getRandomValues(buf);
+    for (const b of buf) {
+      if (b < limit && out.length < START_CODE_LENGTH) out += START_CODE_ALPHABET[b % n];
+    }
+  }
+  return out;
+}
+
+// Auth-e-mail voor een medewerker die via een startcode een pincode instelde.
+// key = de startcode (of nameIndex.loginKey); wordt genormaliseerd en lowercase.
+export function startCodeEmail(employeeId, pinVersion, key) {
+  const k = normalizeStartCode(key).toLowerCase();
+  return `emp-${employeeId}-v${Number(pinVersion) || 0}-${k}@zeiklijst.app`;
+}
+
+// Alleen data:image/(jpeg|png|webp);base64,... wordt als foto geaccepteerd.
+const SAFE_IMAGE_DATA_URL = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+export function isSafeImageDataUrl(s) {
+  return typeof s === "string" && s.length <= 1000000 && SAFE_IMAGE_DATA_URL.test(s);
+}
+
 export function assigneeLabel(task) {
   if (task.assigneeId === "ALLEN") return "Allen";
   if (task.assigneeName) return task.assigneeName;
