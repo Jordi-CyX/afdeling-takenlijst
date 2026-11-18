@@ -840,30 +840,6 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   z-index: 80;
 }
 .guest-app .header-more-menu.hidden { display: none; }
-.guest-app .admin-menu-link {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 0.45rem 0.6rem;
-  border-radius: 8px;
-  color: var(--text-on-dark);
-  text-decoration: none;
-  font-size: 0.85rem;
-  font-weight: 700;
-  font-family: Arial, Helvetica, sans-serif;
-}
-.guest-app .admin-menu-link img {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  display: block;
-}
-.guest-app .admin-menu-link:hover,
-.guest-app .admin-menu-link:focus-visible {
-  background: #3A3A3A;
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
 
 .guest-app .rejection-note {
   margin: 0 0 0.85rem;
@@ -983,6 +959,23 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+.guest-app .code-input {
+  font-size: 1.3rem;
+  letter-spacing: 0.12em;
+  text-align: center;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+.guest-app .form-notice {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  background: #FFF4E5;
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.guest-app .form-notice.hidden { display: none; }
 .guest-app #staff-login button.secondary {
   color: var(--text);
   border-color: var(--border);
@@ -1198,33 +1191,3 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   font-size: 0.88rem;
   word-break: break-word;
 }
-
-.guest-app.is-maintenance .maintenance-screen {
-  min-height: calc(100dvh - 5rem);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.25rem;
-}
-
-.guest-app.is-maintenance .maintenance-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 1rem;
-}
-
-.guest-app.is-maintenance .maintenance-logo {
-  width: 120px;
-  height: 120px;
-  object-fit: contain;
-}
-
-.guest-app.is-maintenance .maintenance-card h2 {
-  margin: 0;
-  color: var(--anthracite);
-  font-size: 1.25rem;
-  line-height: 1.35;
-}
-

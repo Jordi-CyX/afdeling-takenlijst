@@ -9,18 +9,18 @@ import {
   normalizeTask,
   normalizeTemplate,
   normalizeEmployee,
-  escapeHtml,
-  escapeAttr,
   formatDateTime,
   assigneeLabel,
   localDateKey,
   normalizeName,
-  compressImage
+  compressImage,
+  isSafeImageDataUrl
 } from "./shared.js";
 import { serverTimestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   getCurrentStaff,
   initStaffAuth,
+  logoutStaff,
   setStaffDisplayName
 } from "./staff-auth.js";
 
@@ -72,7 +72,7 @@ const REPORT = {
 };
 
 function appVersion() {
-  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v15";
+  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v18";
 }
 
 function isStaffCreated(task) {
@@ -198,29 +198,46 @@ async function maybeGenerate() {
 }
 
 let unsubscribers = [];
+let accessLostHandled = false;
+
+// A listener that is refused (pin reset, account deactivated or removed)
+// sends the employee back to the login screen instead of an empty list.
+function onListenerError(err, message) {
+  if (!isPermissionDenied(err) || accessLostHandled) return;
+  accessLostHandled = true;
+  logoutStaff(message || "Je hebt geen toegang meer. Log opnieuw in of neem contact op met je leidinggevende.");
+}
 
 function startListeners() {
   if (listenersStarted) return;
   listenersStarted = true;
+  accessLostHandled = false;
   unsubscribers.push(listenCollection("tasks", normalizeTask, (list) => {
     tasks = list;
     renderTasks();
     if (currentTaskId) openTask(currentTaskId);
-  }));
+  }, onListenerError));
   unsubscribers.push(listenCollection("recurring", normalizeTemplate, async (list) => {
     templates = list;
     await maybeGenerate();
     renderTasks();
-  }));
+  }, onListenerError));
   unsubscribers.push(listenCollection("employees", normalizeEmployee, (list) => {
     employees = list.filter((e) => e.active).sort((a, b) => a.name.localeCompare(b.name, "nl"));
     const staff = getCurrentStaff();
     if (staff) {
       const mine = employees.find((e) => e.id === staff.employeeId) || list.find((e) => e.id === staff.employeeId);
       if (mine && mine.name) setStaffDisplayName(mine.name);
+      if (mine && mine.active === false) {
+        onListenerError(
+          { code: "permission-denied" },
+          "Je account is niet actief. Neem contact op met je leidinggevende."
+        );
+        return;
+      }
     }
     if (currentTaskId) openTask(currentTaskId);
-  }));
+  }, onListenerError));
 }
 
 function stopListeners() {
@@ -399,19 +416,19 @@ function renderTasks() {
   pendingSection.hidden = !(showPending || forcePending);
 
   if (showOpen) {
-    openList.innerHTML = openTasks.map(taskItemHtml).join("");
+    openList.replaceChildren(...openTasks.map(taskItemElement));
     bindList(openList);
   } else {
-    openList.innerHTML = "";
+    openList.replaceChildren();
   }
 
   if (showPending) {
-    pendingList.innerHTML = pendingTasks.map(taskItemHtml).join("");
+    pendingList.replaceChildren(...pendingTasks.map(taskItemElement));
     bindList(pendingList);
   } else if (forcePending) {
-    pendingList.innerHTML = '<p class="empty-state">Geen taken ter controle.</p>';
+    pendingList.replaceChildren(el("p", "empty-state", "Geen taken ter controle."));
   } else {
-    pendingList.innerHTML = "";
+    pendingList.replaceChildren();
   }
 
   const empty = !showOpen && !showPending && !forcePending;
@@ -426,43 +443,72 @@ function renderTasks() {
   applyView(currentView());
 }
 
-function taskItemHtml(task) {
+// --- Safe DOM helpers: user data only ever goes through textContent / img.src.
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null && text !== "") node.textContent = String(text);
+  return node;
+}
+
+const KNOWN_STATUSES = new Set(["open", "pending", "afgerond"]);
+
+function badgeElements(task) {
+  const badges = [];
+  if (task.status === "open" && wasRejected(task)) badges.push(el("span", "badge rejected", "Afgewezen"));
+  if (task.status === "pending") badges.push(el("span", "badge pending", "Ter controle"));
+  if (isRecurring(task)) badges.push(el("span", "badge recurring", "Herhalend"));
+  if (isStaffCreated(task)) badges.push(el("span", "badge staff-created", "Zelf aangemaakt"));
+  return badges;
+}
+
+function safePhotos(task) {
+  return (Array.isArray(task.photos) ? task.photos : []).filter(isSafeImageDataUrl);
+}
+
+function rejectionByLabel(by) {
+  const value = String(by || "").trim();
+  if (!value) return "";
+  // Never show an e-mail address (the admin account) to staff.
+  return value.includes("@") ? "de beheerder" : value;
+}
+
+function taskItemElement(task) {
   const location = (task.location || "").trim();
   const assignee = assigneeLabel(task);
   const unassigned = assignee === "Niet toegewezen";
   const age = formatRelativeAge(task.createdAt);
-  const badges = [];
-  if (task.status === "open" && wasRejected(task)) {
-    badges.push('<span class="badge rejected">Afgewezen</span>');
+
+  const item = el("div", "task-item");
+  if (KNOWN_STATUSES.has(task.status)) item.classList.add(task.status);
+  item.setAttribute("role", "button");
+  item.tabIndex = 0;
+  item.dataset.taskId = String(task.id);
+
+  const main = el("div", "task-item-main");
+  const textCol = el("div");
+  textCol.append(
+    el("div", "task-title", task.title || ""),
+    el("div", "task-location" + (location ? "" : " hidden"), location),
+    el("div", "task-age" + (age ? "" : " hidden"), age)
+  );
+  main.append(textCol);
+  const badges = badgeElements(task);
+  if (badges.length) {
+    const row = el("div", "badge-row");
+    row.append(...badges);
+    main.append(row);
   }
-  if (task.status === "pending") {
-    badges.push('<span class="badge pending">Ter controle</span>');
-  }
-  if (isRecurring(task)) {
-    badges.push('<span class="badge recurring">Herhalend</span>');
-  }
-  if (isStaffCreated(task)) {
-    badges.push('<span class="badge staff-created">Zelf aangemaakt</span>');
-  }
-  const badgeRow = badges.length ? `<div class="badge-row">${badges.join("")}</div>` : "";
-  return `
-    <div class="task-item ${task.status}" role="button" tabindex="0" data-task-id="${escapeAttr(task.id)}">
-      <div class="task-item-main">
-        <div>
-          <div class="task-title">${escapeHtml(task.title)}</div>
-          <div class="task-location${location ? "" : " hidden"}">${escapeHtml(location)}</div>
-          <div class="task-age${age ? "" : " hidden"}">${escapeHtml(age)}</div>
-        </div>
-        ${badgeRow}
-      </div>
-      <div class="task-assignee${unassigned ? " is-muted" : ""}">${escapeHtml(assignee)}</div>
-    </div>
-  `;
+  item.append(main, el("div", "task-assignee" + (unassigned ? " is-muted" : ""), assignee));
+  return item;
 }
 
 function openTask(id) {
   const task = tasks.find((item) => item.id === id);
-  if (!task) return;
+  if (!task) {
+    if (currentTaskId === id) closeModal();
+    return;
+  }
   currentTaskId = id;
   document.getElementById("modal-title").textContent = task.title;
   const location = (task.location || "").trim();
@@ -470,61 +516,73 @@ function openTask(id) {
   locEl.textContent = location;
   locEl.hidden = !location;
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
-  const statusBadges = [];
-  if (task.status === "open" && wasRejected(task)) {
-    statusBadges.push('<span class="badge rejected">Afgewezen</span>');
-  }
-  if (task.status === "pending") statusBadges.push('<span class="badge pending">Ter controle</span>');
-  if (isRecurring(task)) statusBadges.push('<span class="badge recurring">Herhalend</span>');
-  if (isStaffCreated(task)) statusBadges.push('<span class="badge staff-created">Zelf aangemaakt</span>');
-  document.getElementById("modal-status").innerHTML = statusBadges.join("");
+  document.getElementById("modal-status").replaceChildren(...badgeElements(task));
 
   const rejectionEl = document.getElementById("modal-rejection");
   if (wasRejected(task) && task.status === "open") {
     const when = rejectionAt(task);
-    const by = rejectionBy(task);
+    const by = rejectionByLabel(rejectionBy(task));
     const reason = rejectionReason(task);
-    const parts = ["<p>Deze taak staat weer open.</p>"];
+    const parts = [el("p", "", "Deze taak staat weer open.")];
     if (when) {
-      parts.push(`<p>Afgewezen op ${escapeHtml(formatDateTime(when))}${by ? ` door ${escapeHtml(by)}` : ""}.</p>`);
+      parts.push(el("p", "", `Afgewezen op ${formatDateTime(when)}${by ? ` door ${by}` : ""}.`));
     }
-    if (reason) parts.push(`<p>Reden: ${escapeHtml(reason)}</p>`);
-    rejectionEl.innerHTML = parts.join("");
+    if (reason) parts.push(el("p", "", `Reden: ${reason}`));
+    rejectionEl.replaceChildren(...parts);
     rejectionEl.classList.remove("hidden");
   } else {
-    rejectionEl.innerHTML = "";
+    rejectionEl.replaceChildren();
     rejectionEl.classList.add("hidden");
   }
 
   const extra = [];
   if (task.createdAt) {
     const age = formatRelativeAge(task.createdAt);
-    extra.push(`Aangemaakt op ${escapeHtml(formatDateTime(task.createdAt))}${age ? ` (${escapeHtml(age)})` : ""}`);
+    extra.push(`Aangemaakt op ${formatDateTime(task.createdAt)}${age ? ` (${age})` : ""}`);
   }
   if (task.pendingAt) {
-    const by = task.pendingBy ? ` door ${escapeHtml(task.pendingBy)}` : "";
-    extra.push(`Afgevinkt op ${escapeHtml(formatDateTime(task.pendingAt))}${by}`);
+    const by = task.pendingBy ? ` door ${task.pendingBy}` : "";
+    extra.push(`Afgevinkt op ${formatDateTime(task.pendingAt)}${by}`);
   }
-  const desc = `<p>${escapeHtml(task.description || "").replace(/\n/g, "<br>")}</p>`
-    + (extra.length ? `<div class="task-meta">${extra.join("<br>")}</div>` : "");
-  document.getElementById("modal-description").innerHTML = desc;
-  const photos = (task.photos || []).filter((src) => typeof src === "string" && src.startsWith("data:image"));
-  document.getElementById("modal-photos").innerHTML = photos.map((src) =>
-    `<img src="${src}" alt="Foto bij taak" tabindex="0">`
-  ).join("");
+  const descEl = document.getElementById("modal-description");
+  const descP = el("p", "modal-description-text", task.description || "");
+  descP.style.whiteSpace = "pre-line";
+  const descChildren = [descP];
+  if (extra.length) {
+    const meta = el("div", "task-meta");
+    meta.style.whiteSpace = "pre-line";
+    meta.textContent = extra.join("\n");
+    descChildren.push(meta);
+  }
+  descEl.replaceChildren(...descChildren);
+
+  const photoEls = safePhotos(task).map((src) => {
+    const img = document.createElement("img");
+    img.alt = "Foto bij taak";
+    img.tabIndex = 0;
+    img.src = src;
+    return img;
+  });
+  document.getElementById("modal-photos").replaceChildren(...photoEls);
 
   const tickRow = document.getElementById("tick-by-row");
   tickRow.classList.toggle("hidden", task.status !== "open");
   if (task.status === "open") fillTickName();
 
   const actions = document.getElementById("modal-actions");
-  actions.innerHTML = "";
+  actions.replaceChildren();
   if (task.status === "open") {
-    actions.innerHTML = `<button type="button" class="success" id="tick-btn">Markeer als gedaan</button>`;
-    document.getElementById("tick-btn").onclick = () => markPending(task.id);
+    const btn = el("button", "success", "Markeer als gedaan");
+    btn.type = "button";
+    btn.id = "tick-btn";
+    btn.onclick = () => markPending(task.id);
+    actions.append(btn);
   } else if (task.status === "pending") {
-    actions.innerHTML = `<button type="button" class="secondary" id="untick-btn">Ongedaan maken</button>`;
-    document.getElementById("untick-btn").onclick = () => unmarkPending(task.id);
+    const btn = el("button", "secondary", "Ongedaan maken");
+    btn.type = "button";
+    btn.id = "untick-btn";
+    btn.onclick = () => unmarkPending(task.id);
+    actions.append(btn);
   }
   document.getElementById("modal").classList.remove("hidden");
 }
@@ -634,6 +692,7 @@ async function compressPhoto(file, maxChars = PHOTO_MAX_CHARS) {
   let dataUrl = "";
   for (let i = 0; i < 7; i++) {
     dataUrl = await compressImage(file, edge, quality);
+    if (dataUrl && !isSafeImageDataUrl(dataUrl)) throw new Error("Kies een geldige foto.");
     if (!dataUrl || dataUrl.length <= maxChars) return dataUrl;
     edge = Math.max(280, Math.round(edge * 0.7));
     quality = Math.max(0.32, quality - 0.08);
@@ -648,20 +707,22 @@ function bindPhotoPreview(input, preview) {
   input.addEventListener("change", () => {
     const file = input.files && input.files[0];
     if (!file) {
-      preview.innerHTML = "";
+      preview.replaceChildren();
       preview.classList.add("hidden");
       return;
     }
     const url = URL.createObjectURL(file);
-    preview.innerHTML = `
-      <img src="${url}" alt="Gekozen foto">
-      <button type="button" class="photo-preview-remove">Foto verwijderen</button>
-    `;
+    const img = document.createElement("img");
+    img.alt = "Gekozen foto";
+    img.src = url;
+    const remove = el("button", "photo-preview-remove", "Foto verwijderen");
+    remove.type = "button";
+    preview.replaceChildren(img, remove);
     preview.classList.remove("hidden");
-    preview.querySelector(".photo-preview-remove").addEventListener("click", () => {
+    remove.addEventListener("click", () => {
       URL.revokeObjectURL(url);
       input.value = "";
-      preview.innerHTML = "";
+      preview.replaceChildren();
       preview.classList.add("hidden");
     });
   });
@@ -688,7 +749,7 @@ function openAddTaskPage() {
   if (form) form.reset();
   const preview = document.getElementById("add-task-photo-preview");
   if (preview) {
-    preview.innerHTML = "";
+    preview.replaceChildren();
     preview.classList.add("hidden");
   }
   setFormError("add-task-error", "");
@@ -720,7 +781,7 @@ function openReportPage() {
   if (form) form.reset();
   const preview = document.getElementById("report-photo-preview");
   if (preview) {
-    preview.innerHTML = "";
+    preview.replaceChildren();
     preview.classList.add("hidden");
   }
   setFormError("report-error", "");
@@ -979,13 +1040,18 @@ function setupUpdateBanner() {
 
   if (!("serviceWorker" in navigator)) return;
 
+  // Only reload when an existing worker is replaced (not on the very first install).
+  const hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (reloading) return;
+    if (!hadController || reloading) return;
     reloading = true;
     location.reload();
   });
 
-  navigator.serviceWorker.register("./sw.js").then((reg) => {
+  navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((reg) => {
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) reg.update().catch(() => {});
+    });
     if (reg.waiting) attachWaiting(reg.waiting);
     reg.addEventListener("updatefound", () => {
       const installing = reg.installing;
