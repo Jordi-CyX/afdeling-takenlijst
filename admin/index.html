@@ -12,10 +12,10 @@
   <title>Zeiklijst Admin</title>
   <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" type="image/png" href="icons/icon-192.png?v=16">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=16">
-  <link rel="stylesheet" href="../styles.css?v=16">
-  <link rel="stylesheet" href="admin.css?v=16">
+  <link rel="icon" type="image/png" href="icons/icon-192.png?v=17">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=17">
+  <link rel="stylesheet" href="../styles.css?v=17">
+  <link rel="stylesheet" href="admin.css?v=17">
 </head>
 <body>
   <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
@@ -35,6 +35,7 @@
             <span id="nav-pin-badge" class="nav-badge nav-badge-pin hidden" aria-label="Pincode-verzoeken">0</span>
             <span id="nav-staff-badge" class="nav-badge nav-badge-staff hidden" aria-label="Aangemaakte taken">0</span>
             <span id="nav-reports-toggle-badge" class="nav-badge nav-badge-report hidden" aria-label="Nieuwe meldingen">0</span>
+            <span id="nav-overdue-badge" class="nav-badge nav-badge-overdue hidden" aria-label="Streefdatum verstreken">0</span>
           </button>
           <ul id="nav-menu" class="nav-menu hidden" role="menu">
             <li role="none"><button type="button" role="menuitem" data-section="dashboard">Dashboard</button></li>
@@ -48,6 +49,7 @@
               <button type="button" role="menuitem" data-section="taken">
                 Taken
                 <span id="nav-taken-badge" class="nav-badge nav-badge-staff hidden">0</span>
+                <span id="nav-taken-overdue-badge" class="nav-badge nav-badge-overdue hidden">0</span>
               </button>
             </li>
             <li role="none">
@@ -102,8 +104,13 @@
           <span class="stat-value" id="stat-pending">0</span>
           <span class="stat-label">Pending</span>
         </button>
+        <button type="button" class="stat-card stat-overdue" id="stat-overdue-card">
+          <span class="stat-value" id="stat-overdue">0</span>
+          <span class="stat-label">Streefdatum verstreken</span>
+        </button>
       </div>
       <p class="stat-done-mini">Afgerond: <strong id="stat-done">0</strong></p>
+      <div id="dashboard-overdue" class="overdue-list hidden"></div>
       <div id="dashboard-staff-tasks" class="staff-created-list hidden"></div>
       <h3>Huidige verdeling</h3>
       <div id="dashboard-workload" class="workload-list"></div>
@@ -134,6 +141,10 @@
       <form id="add-task-form">
         <input type="text" id="title" placeholder="Titel" required autocomplete="off">
         <input type="text" id="location" placeholder="Locatie (bijv. Gang 12 of Buitenterrein)" autocomplete="off">
+        <label id="due-date-wrap">
+          Streefdatum (optioneel)
+          <input type="date" id="due-date">
+        </label>
         <textarea id="description" placeholder="Beschrijving (optioneel)" rows="4"></textarea>
         <label>
           Toegewezen aan (optioneel)
@@ -195,6 +206,7 @@
             <button type="button" data-filter="all" aria-pressed="true">Alles</button>
             <button type="button" data-filter="open">Open</button>
             <button type="button" data-filter="pending">Pending</button>
+            <button type="button" data-filter="overdue">Streefdatum verstreken</button>
           </div>
         </div>
         <label>
@@ -334,6 +346,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=16"></script>
+  <script type="module" src="admin.js?v=17"></script>
 </body>
 </html>

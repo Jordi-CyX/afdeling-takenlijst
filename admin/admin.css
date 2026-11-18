@@ -686,3 +686,37 @@ button.stat-card:active {
   font-size: 2rem;
   border: 0;
 }
+
+.nav-badge-overdue,
+.badge.overdue {
+  background: var(--magenta, #C40070);
+  color: #fff;
+}
+
+.stat-card.stat-overdue {
+  border-top: 4px solid var(--magenta, #C40070);
+}
+
+.overdue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+}
+
+.overdue-list h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.task-due-date {
+  margin: 0.2rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.task-due-date.overdue {
+  color: var(--magenta, #C40070);
+  font-weight: 700;
+}

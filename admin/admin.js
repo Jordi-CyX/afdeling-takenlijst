@@ -230,6 +230,36 @@ function isStaffCreatedTask(task) {
   return Boolean(task && task.createdByRole === "staff");
 }
 
+function isValidDueDate(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+
+function readDueDateInput() {
+  const value = (document.getElementById("due-date") && document.getElementById("due-date").value || "").trim();
+  return isValidDueDate(value) ? value : "";
+}
+
+function formatDueDate(value) {
+  if (!isValidDueDate(value)) return "";
+  const [year, month, day] = value.trim().split("-");
+  return `${day}-${month}-${year}`;
+}
+
+function isOverdue(task) {
+  if (!task || task.status === "afgerond" || !isValidDueDate(task.dueDate)) return false;
+  return task.dueDate.trim() < localDateKey(new Date());
+}
+
+function overdueTasks() {
+  return tasks.filter(isOverdue).sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
+}
+
+function dueDateLabel(task) {
+  if (!isValidDueDate(task && task.dueDate)) return "";
+  const overdue = isOverdue(task);
+  return `<div class="task-due-date${overdue ? " overdue" : ""}">Streefdatum ${escapeHtml(formatDueDate(task.dueDate))}</div>`;
+}
+
 function newStaffCreatedTasks() {
   return tasks.filter((task) => isStaffCreatedTask(task) && task.adminReview === "nieuw")
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
@@ -461,6 +491,8 @@ function setupUi() {
   });
   document.getElementById("stat-open-card").onclick = () => showSection("taken", true, { filters: { status: "open" } });
   document.getElementById("stat-pending-card").onclick = () => showSection("controle");
+  const overdueCard = document.getElementById("stat-overdue-card");
+  if (overdueCard) overdueCard.onclick = () => showSection("taken", true, { filters: { status: "overdue" } });
   document.getElementById("task-search").oninput = (event) => {
     taskFilters.q = event.target.value;
     renderTasks();
@@ -592,6 +624,8 @@ function updateRecurrenceVisibility() {
   const type = document.getElementById("recurrence-type").value;
   document.getElementById("weekday-picker").classList.toggle("hidden", !recurring || type !== "weekdays");
   document.getElementById("date-picker-fields").classList.toggle("hidden", !recurring || type !== "date");
+  const dueWrap = document.getElementById("due-date-wrap");
+  if (dueWrap) dueWrap.classList.toggle("hidden", recurring);
 }
 
 async function submitLogin(event) {
@@ -705,7 +739,8 @@ async function submitTaskForm(event) {
         description,
         location,
         ...assignee,
-        photos: nextPhotos
+        photos: nextPhotos,
+        dueDate: readDueDateInput() || null
       };
       assertDocSize({ ...serializeTask({ ...task, ...payload }), ...payload });
       const ok = await safeWrite(() => updateDoc(doc(db, "tasks", editingTaskId), payload));
@@ -759,7 +794,8 @@ async function submitTaskForm(event) {
       ...assignee,
       photos,
       status: "open",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      dueDate: readDueDateInput()
     });
     assertDocSize(payload);
     const ok = await safeWrite(() => addDoc(collection(db, "tasks"), payload));
@@ -798,6 +834,7 @@ function startEditTask(id) {
   document.getElementById("location").value = task.location || "";
   document.getElementById("description").value = task.description || "";
   document.getElementById("assignee-select").value = task.assigneeId || "";
+  document.getElementById("due-date").value = isValidDueDate(task.dueDate) ? task.dueDate : "";
   document.getElementById("is-recurring").checked = false;
   document.getElementById("is-recurring").disabled = true;
   document.getElementById("photos").value = "";
@@ -958,6 +995,13 @@ function updateNavBadge() {
     el.textContent = String(reportCount);
     el.classList.toggle("hidden", reportCount < 1);
   });
+  const overdueCount = overdueTasks().length;
+  ["nav-overdue-badge", "nav-taken-overdue-badge"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = String(overdueCount);
+    el.classList.toggle("hidden", overdueCount < 1);
+  });
 }
 
 function renderAll() {
@@ -1016,6 +1060,20 @@ function renderDashboard() {
   document.getElementById("stat-open").textContent = tasks.filter((t) => t.status === "open").length;
   document.getElementById("stat-pending").textContent = tasks.filter((t) => t.status === "pending").length;
   document.getElementById("stat-done").textContent = tasks.filter((t) => t.status === "afgerond").length;
+  const overdue = overdueTasks();
+  const overdueStat = document.getElementById("stat-overdue");
+  if (overdueStat) overdueStat.textContent = String(overdue.length);
+  const overdueBox = document.getElementById("dashboard-overdue");
+  if (overdueBox) {
+    if (!overdue.length) {
+      overdueBox.innerHTML = "";
+      overdueBox.classList.add("hidden");
+    } else {
+      overdueBox.classList.remove("hidden");
+      overdueBox.innerHTML = `<h3>Streefdatum verstreken</h3>` + overdue.map(taskItemHtml).join("");
+      bindTaskItems(overdueBox);
+    }
+  }
   const workload = document.getElementById("dashboard-workload");
   const rows = currentWorkloadGroups();
   if (!rows.length) {
@@ -1355,12 +1413,14 @@ function taskItemHtml(task) {
     `<span class="badge ${task.status}">${task.status === "open" ? "Open" : task.status === "pending" ? "Pending" : "Afgerond"}</span>`
   ];
   if (isRecurring(task)) badges.unshift('<span class="badge recurring">Herhalend</span>');
+  if (isOverdue(task)) badges.push('<span class="badge overdue">Verstreken</span>');
   return `
     <div class="task-item ${task.status}" role="button" tabindex="0" data-task-id="${escapeAttr(task.id)}">
       <div class="task-item-main">
         <div>
           <div class="task-title">${escapeHtml(task.title)}</div>
           ${locationLabel(task)}
+          ${dueDateLabel(task)}
           ${isStaffCreatedTask(task) ? `<div class="task-created-by">Door ${escapeHtml(staffCreatorLabel(task))} aangemaakt</div>` : ""}
         </div>
         <div class="badge-row">${badges.join("")}</div>
@@ -1387,7 +1447,9 @@ function taskMatchesFilters(task, includeCompleted = false) {
   if (!includeCompleted && task.status === "afgerond") return false;
   if (includeCompleted && task.status !== "afgerond") return false;
   const status = taskFilters.status || "all";
-  if (!includeCompleted && status !== "all" && task.status !== status) return false;
+  if (!includeCompleted && status === "overdue") {
+    if (!isOverdue(task)) return false;
+  } else if (!includeCompleted && status !== "all" && task.status !== status) return false;
   const q = (taskFilters.q || "").trim().toLowerCase();
   if (q) {
     const hay = `${task.title || ""} ${task.location || ""} ${task.description || ""} ${task.assigneeName || ""}`.toLowerCase();
@@ -1707,11 +1769,15 @@ function openTask(id) {
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
   const statusBadges = [`<span class="badge ${task.status}">${task.status === "open" ? "Open" : task.status === "pending" ? "Pending" : "Afgerond"}</span>`];
   if (isRecurring(task)) statusBadges.push('<span class="badge recurring">Herhalend</span>');
+  if (isOverdue(task)) statusBadges.push('<span class="badge overdue">Verstreken</span>');
   if (task.rejectedCount || task.lastRejectedAt || (Array.isArray(task.rejections) && task.rejections.length)) {
     statusBadges.push('<span class="badge paused">Afgewezen</span>');
   }
   document.getElementById("modal-status").innerHTML = statusBadges.join("");
   const extra = [];
+  if (isValidDueDate(task.dueDate)) {
+    extra.push(`Streefdatum ${escapeHtml(formatDueDate(task.dueDate))}${isOverdue(task) ? " (verstreken)" : ""}`);
+  }
   if (task.createdAt) extra.push(`Aangemaakt op ${escapeHtml(formatDateTime(task.createdAt))}`);
   if (isStaffCreatedTask(task)) {
     extra.push(`Door ${escapeHtml(staffCreatorLabel(task))} aangemaakt`);
