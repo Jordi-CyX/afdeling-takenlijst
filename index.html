@@ -14,7 +14,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=14">
+  <link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body class="guest-app is-locked">
   <header>
@@ -40,6 +40,7 @@
               <img src="admin/icons/icon-192.png" alt="" width="24" height="24">
               <span>Zeiklijst Admin</span>
             </a>
+            <button type="button" id="report-menu-btn" class="menu-action hidden" role="menuitem">Fout melden</button>
             <button type="button" id="logout-menu-btn" class="menu-action hidden" role="menuitem">Uitloggen</button>
           </div>
         </div>
@@ -143,8 +144,75 @@
     <img id="lightbox-img" alt="Foto bij taak">
   </div>
 
+  <button type="button" id="add-task-fab" class="add-task-fab" aria-label="Taak toevoegen" title="Taak toevoegen">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+  </button>
+
+  <div id="add-task-page" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-task-heading">
+    <div class="modal-content sheet-content">
+      <button type="button" class="close" id="add-task-close" aria-label="Sluiten">&times;</button>
+      <h2 id="add-task-heading">Taak toevoegen</h2>
+      <form id="staff-add-task-form" class="staff-sheet-form">
+        <label>
+          Titel
+          <input type="text" id="add-task-title-input" name="title" maxlength="120" required autocomplete="off">
+        </label>
+        <label>
+          Locatie
+          <input type="text" id="add-task-location-input" name="location" maxlength="120" autocomplete="off">
+        </label>
+        <label>
+          Beschrijving
+          <textarea id="add-task-description-input" name="description" maxlength="2000" rows="4"></textarea>
+        </label>
+        <label class="file-label">
+          Foto
+          <input type="file" id="add-task-photo" name="photo" accept="image/*">
+        </label>
+        <div id="add-task-photo-preview" class="photo-preview hidden"></div>
+        <p class="assignee-fixed">Toegewezen aan: <strong id="add-task-assignee"></strong></p>
+        <p id="add-task-error" class="form-error hidden"></p>
+        <div class="form-actions">
+          <button type="submit">Toevoegen</button>
+          <button type="button" class="secondary" id="add-task-cancel">Annuleren</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="report-page" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="report-heading">
+    <div class="modal-content sheet-content">
+      <button type="button" class="close" id="report-close" aria-label="Sluiten">&times;</button>
+      <h2 id="report-heading">Fout melden</h2>
+      <form id="report-form" class="staff-sheet-form">
+        <label>
+          Omschrijving
+          <textarea id="report-description" name="description" maxlength="1000" rows="6" required></textarea>
+        </label>
+        <p id="report-count" class="char-count">0 / 1000</p>
+        <label class="file-label">
+          Foto of screenshot
+          <input type="file" id="report-photo" name="photo" accept="image/*">
+        </label>
+        <div id="report-photo-preview" class="photo-preview hidden"></div>
+        <dl class="auto-info">
+          <div><dt>Naam</dt><dd id="report-info-name"></dd></div>
+          <div><dt>Tijd</dt><dd id="report-info-time"></dd></div>
+          <div><dt>App-versie</dt><dd id="report-info-version"></dd></div>
+          <div><dt>Toestel</dt><dd id="report-info-device"></dd></div>
+        </dl>
+        <p id="report-error" class="form-error hidden"></p>
+        <div class="form-actions">
+          <button type="submit">Versturen</button>
+          <button type="button" class="secondary" id="report-cancel">Annuleren</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=14"></script>
+  <script src="app-version.js?v=15"></script>
+  <script type="module" src="app.js?v=15"></script>
 </body>
 </html>

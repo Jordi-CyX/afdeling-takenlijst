@@ -81,6 +81,11 @@ function screenshotLoginStep() {
   return "";
 }
 
+function screenshotPreviewStaff() {
+  const params = new URLSearchParams(location.search);
+  return params.get("showAddTask") === "1" || params.get("showReport") === "1";
+}
+
 function isOffline(err) {
   const code = String((err && err.code) || "");
   const message = String((err && err.message) || err || "");
@@ -216,6 +221,8 @@ function renderHeaderUser() {
     menu.classList.toggle("hidden", !name);
   }
   if (logoutBtn) logoutBtn.classList.toggle("hidden", !name);
+  const reportBtn = $("report-menu-btn");
+  if (reportBtn) reportBtn.classList.toggle("hidden", !name);
 }
 
 function acceptStaff(staff) {
@@ -533,6 +540,13 @@ export function initStaffAuth(options) {
   };
   bindUi();
   renderHeaderUser();
+
+  if (screenshotPreviewStaff()) {
+    currentStaff = { employeeId: "demo", nameKey: "demo", name: "Demo", pinVersion: 0 };
+    renderHeaderUser();
+    hideLogin();
+    return;
+  }
 
   const forced = screenshotLoginStep();
   if (forced) {

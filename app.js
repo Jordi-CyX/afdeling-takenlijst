@@ -1,6 +1,8 @@
 import {
   db,
   doc,
+  addDoc,
+  collection,
   updateDoc,
   listenCollection,
   generateDueInstances,
@@ -12,8 +14,10 @@ import {
   formatDateTime,
   assigneeLabel,
   localDateKey,
-  normalizeName
+  normalizeName,
+  compressImage
 } from "./shared.js";
+import { serverTimestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   getCurrentStaff,
   initStaffAuth,
@@ -32,6 +36,55 @@ let toastTimer = 0;
 const VIEW_KEY = "zeiklijst-view";
 const FILTER_KEY = "zeiklijst-filter";
 const FILTERS = new Set(["all", "mine", "allen", "unassigned", "pending"]);
+
+const TITLE_MAX = 120;
+const LOCATION_MAX = 120;
+const DESCRIPTION_MAX = 2000;
+const REPORT_DESC_MAX = 1000;
+const PHOTO_MAX_CHARS = 700000;
+const DEVICE_MAX_CHARS = 300;
+
+// Field names for staff-created tasks and reports. Must match ZLA's rules exactly.
+const STAFF_TASK = {
+  title: "title",
+  description: "description",
+  location: "location",
+  assigneeId: "assigneeId",
+  assigneeName: "assigneeName",
+  status: "status",
+  createdAt: "createdAt",
+  photos: "photos",
+  createdByRole: "createdByRole",
+  createdByEmployeeId: "createdByEmployeeId",
+  createdByName: "createdByName",
+  adminReview: "adminReview"
+};
+
+const REPORT = {
+  description: "description",
+  photo: "photo",
+  employeeId: "employeeId",
+  employeeName: "employeeName",
+  createdAt: "createdAt",
+  appVersion: "appVersion",
+  device: "device",
+  status: "status"
+};
+
+function appVersion() {
+  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v15";
+}
+
+function isStaffCreated(task) {
+  return Boolean(task && task.createdByRole === "staff");
+}
+
+function officialStaffName() {
+  const staff = getCurrentStaff();
+  if (!staff) return "";
+  const mine = employees.find((e) => e.id === staff.employeeId);
+  return (mine && mine.name) || staff.name || "";
+}
 
 function isRecurring(task) {
   return Boolean(task.recurringId);
@@ -216,6 +269,7 @@ function setupUi() {
   });
   setupHeaderMenu();
   setupLightbox();
+  setupStaffPages();
   setupUpdateBanner();
   applyView(currentView());
   document.addEventListener("visibilitychange", () => {
@@ -387,6 +441,9 @@ function taskItemHtml(task) {
   if (isRecurring(task)) {
     badges.push('<span class="badge recurring">Herhalend</span>');
   }
+  if (isStaffCreated(task)) {
+    badges.push('<span class="badge staff-created">Zelf aangemaakt</span>');
+  }
   const badgeRow = badges.length ? `<div class="badge-row">${badges.join("")}</div>` : "";
   return `
     <div class="task-item ${task.status}" role="button" tabindex="0" data-task-id="${escapeAttr(task.id)}">
@@ -419,6 +476,7 @@ function openTask(id) {
   }
   if (task.status === "pending") statusBadges.push('<span class="badge pending">Ter controle</span>');
   if (isRecurring(task)) statusBadges.push('<span class="badge recurring">Herhalend</span>');
+  if (isStaffCreated(task)) statusBadges.push('<span class="badge staff-created">Zelf aangemaakt</span>');
   document.getElementById("modal-status").innerHTML = statusBadges.join("");
 
   const rejectionEl = document.getElementById("modal-rejection");
@@ -539,6 +597,360 @@ async function unmarkPending(id) {
   }
 }
 
+
+function screenshotForm() {
+  const params = new URLSearchParams(location.search);
+  if (params.get("showAddTask") === "1") return "add";
+  if (params.get("showReport") === "1") return "report";
+  return "";
+}
+
+function isPermissionDenied(err) {
+  const code = String((err && err.code) || "");
+  const message = String((err && err.message) || err || "");
+  return /permission-denied/i.test(`${code} ${message}`);
+}
+
+function setFormError(id, message) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = message || "";
+  el.classList.toggle("hidden", !message);
+}
+
+function deviceInfo() {
+  const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "");
+  const uaData = typeof navigator !== "undefined" ? navigator.userAgentData : null;
+  const platform = String((uaData && uaData.platform) || (typeof navigator !== "undefined" && navigator.platform) || "");
+  const screenSize = (typeof screen !== "undefined" && screen.width && screen.height)
+    ? `${screen.width}x${screen.height}`
+    : "";
+  return `${ua} | ${platform} | ${screenSize}`.slice(0, DEVICE_MAX_CHARS);
+}
+
+async function compressPhoto(file, maxChars = PHOTO_MAX_CHARS) {
+  let edge = 1000;
+  let quality = 0.6;
+  let dataUrl = "";
+  for (let i = 0; i < 7; i++) {
+    dataUrl = await compressImage(file, edge, quality);
+    if (!dataUrl || dataUrl.length <= maxChars) return dataUrl;
+    edge = Math.max(280, Math.round(edge * 0.7));
+    quality = Math.max(0.32, quality - 0.08);
+  }
+  if (!dataUrl || dataUrl.length > maxChars) {
+    throw new Error("De foto is te groot. Kies een kleinere foto.");
+  }
+  return dataUrl;
+}
+
+function bindPhotoPreview(input, preview) {
+  input.addEventListener("change", () => {
+    const file = input.files && input.files[0];
+    if (!file) {
+      preview.innerHTML = "";
+      preview.classList.add("hidden");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    preview.innerHTML = `
+      <img src="${url}" alt="Gekozen foto">
+      <button type="button" class="photo-preview-remove">Foto verwijderen</button>
+    `;
+    preview.classList.remove("hidden");
+    preview.querySelector(".photo-preview-remove").addEventListener("click", () => {
+      URL.revokeObjectURL(url);
+      input.value = "";
+      preview.innerHTML = "";
+      preview.classList.add("hidden");
+    });
+  });
+}
+
+function closePage(id) {
+  const page = document.getElementById(id);
+  if (page) page.classList.add("hidden");
+}
+
+function closeStaffPages() {
+  closePage("add-task-page");
+  closePage("report-page");
+}
+
+function openAddTaskPage() {
+  const staff = getCurrentStaff();
+  if (!staff) {
+    showToast("Je bent niet ingelogd.", "error");
+    return;
+  }
+  closePage("report-page");
+  const form = document.getElementById("staff-add-task-form");
+  if (form) form.reset();
+  const preview = document.getElementById("add-task-photo-preview");
+  if (preview) {
+    preview.innerHTML = "";
+    preview.classList.add("hidden");
+  }
+  setFormError("add-task-error", "");
+  const assignee = document.getElementById("add-task-assignee");
+  if (assignee) assignee.textContent = officialStaffName();
+  const page = document.getElementById("add-task-page");
+  if (page) page.classList.remove("hidden");
+  const title = document.getElementById("add-task-title-input");
+  if (title) {
+    try { title.focus(); } catch { /* ignore */ }
+  }
+}
+
+function updateReportCount() {
+  const input = document.getElementById("report-description");
+  const count = document.getElementById("report-count");
+  if (!input || !count) return;
+  count.textContent = `${input.value.length} / ${REPORT_DESC_MAX}`;
+}
+
+function openReportPage() {
+  const staff = getCurrentStaff();
+  if (!staff) {
+    showToast("Je bent niet ingelogd.", "error");
+    return;
+  }
+  closePage("add-task-page");
+  const form = document.getElementById("report-form");
+  if (form) form.reset();
+  const preview = document.getElementById("report-photo-preview");
+  if (preview) {
+    preview.innerHTML = "";
+    preview.classList.add("hidden");
+  }
+  setFormError("report-error", "");
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+  setText("report-info-name", officialStaffName());
+  setText("report-info-time", formatDateTime(new Date()));
+  setText("report-info-version", appVersion());
+  setText("report-info-device", deviceInfo() || "Onbekend");
+  updateReportCount();
+  const page = document.getElementById("report-page");
+  if (page) page.classList.remove("hidden");
+  const desc = document.getElementById("report-description");
+  if (desc) {
+    try { desc.focus(); } catch { /* ignore */ }
+  }
+}
+
+function openScreenshotForm() {
+  const which = screenshotForm();
+  if (which === "add") openAddTaskPage();
+  if (which === "report") openReportPage();
+}
+
+function writeFormError(err, permissionText, fallback) {
+  if (isPermissionDenied(err)) return permissionText;
+  if (/te groot|geldige foto/i.test(String((err && err.message) || err || ""))) {
+    return err.message;
+  }
+  const code = String((err && err.code) || "");
+  const message = String((err && err.message) || err || "");
+  const offline = (typeof navigator !== "undefined" && navigator.onLine === false)
+    || /unavailable|offline|network/i.test(`${code} ${message}`);
+  return offline
+    ? "Geen verbinding. Probeer het opnieuw als je weer online bent."
+    : fallback;
+}
+
+function setFormBusy(form, busy) {
+  if (!form) return;
+  form.querySelectorAll("button, input, textarea").forEach((el) => {
+    el.disabled = Boolean(busy);
+  });
+}
+
+async function onAddTaskSubmit(event) {
+  event.preventDefault();
+  const staff = getCurrentStaff();
+  if (!staff) {
+    setFormError("add-task-error", "Je bent niet ingelogd.");
+    return;
+  }
+  const title = document.getElementById("add-task-title-input").value.trim();
+  const location = document.getElementById("add-task-location-input").value.trim();
+  const description = document.getElementById("add-task-description-input").value.trim();
+  if (!title) {
+    setFormError("add-task-error", "Vul een titel in.");
+    return;
+  }
+  if (title.length > TITLE_MAX) {
+    setFormError("add-task-error", `De titel mag maximaal ${TITLE_MAX} tekens zijn.`);
+    return;
+  }
+  if (location.length > LOCATION_MAX) {
+    setFormError("add-task-error", `De locatie mag maximaal ${LOCATION_MAX} tekens zijn.`);
+    return;
+  }
+  if (description.length > DESCRIPTION_MAX) {
+    setFormError("add-task-error", `De beschrijving mag maximaal ${DESCRIPTION_MAX} tekens zijn.`);
+    return;
+  }
+  const form = document.getElementById("staff-add-task-form");
+  const fileInput = document.getElementById("add-task-photo");
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  setFormBusy(form, true);
+  setFormError("add-task-error", "");
+  try {
+    const photos = [];
+    if (file) {
+      if (file.type && !file.type.startsWith("image/")) {
+        throw new Error("Kies een geldige foto.");
+      }
+      const dataUrl = await compressPhoto(file);
+      if (dataUrl) photos.push(dataUrl);
+    }
+    const name = officialStaffName();
+    const F = STAFF_TASK;
+    // dueDate is admin-only: never set it on staff creates, and never show it in this app.
+    const payload = {
+      [F.title]: title,
+      [F.description]: description,
+      [F.location]: location,
+      [F.assigneeId]: staff.employeeId,
+      [F.assigneeName]: name,
+      [F.status]: "open",
+      [F.createdAt]: new Date().toISOString(),
+      [F.photos]: photos,
+      [F.createdByRole]: "staff",
+      [F.createdByEmployeeId]: staff.employeeId,
+      [F.createdByName]: name,
+      [F.adminReview]: "nieuw"
+    };
+    delete payload.dueDate;
+    await addDoc(collection(db, "tasks"), payload);
+    closePage("add-task-page");
+    showToast("Taak toegevoegd.", "success");
+  } catch (err) {
+    const message = writeFormError(
+      err,
+      "Taak toevoegen is nog niet beschikbaar",
+      "Opslaan is mislukt. Probeer het opnieuw."
+    );
+    setFormError("add-task-error", message);
+    showToast(message, "error");
+  } finally {
+    setFormBusy(form, false);
+  }
+}
+
+async function onReportSubmit(event) {
+  event.preventDefault();
+  const staff = getCurrentStaff();
+  if (!staff) {
+    setFormError("report-error", "Je bent niet ingelogd.");
+    return;
+  }
+  const description = document.getElementById("report-description").value.trim();
+  if (!description) {
+    setFormError("report-error", "Vul een omschrijving in.");
+    return;
+  }
+  if (description.length > REPORT_DESC_MAX) {
+    setFormError("report-error", `De omschrijving mag maximaal ${REPORT_DESC_MAX} tekens zijn.`);
+    return;
+  }
+  const form = document.getElementById("report-form");
+  const fileInput = document.getElementById("report-photo");
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  setFormBusy(form, true);
+  setFormError("report-error", "");
+  try {
+    const F = REPORT;
+    const payload = {
+      [F.description]: description,
+      [F.employeeId]: staff.employeeId,
+      [F.employeeName]: officialStaffName(),
+      [F.createdAt]: serverTimestamp(),
+      [F.appVersion]: appVersion(),
+      [F.device]: deviceInfo(),
+      [F.status]: "nieuw"
+    };
+    if (file) {
+      if (file.type && !file.type.startsWith("image/")) {
+        throw new Error("Kies een geldige foto.");
+      }
+      const dataUrl = await compressPhoto(file);
+      if (dataUrl) payload[F.photo] = dataUrl;
+    }
+    await addDoc(collection(db, "reports"), payload);
+    closePage("report-page");
+    showToast("Bedankt, je melding is verstuurd", "success");
+  } catch (err) {
+    const message = writeFormError(
+      err,
+      "Fout melden is nog niet beschikbaar",
+      "Versturen is mislukt. Probeer het opnieuw."
+    );
+    setFormError("report-error", message);
+    showToast(message, "error");
+  } finally {
+    setFormBusy(form, false);
+  }
+}
+
+function setupStaffPages() {
+  const addForm = document.getElementById("staff-add-task-form");
+  const reportForm = document.getElementById("report-form");
+  const fab = document.getElementById("add-task-fab");
+  const reportBtn = document.getElementById("report-menu-btn");
+  if (fab) fab.addEventListener("click", openAddTaskPage);
+  if (reportBtn) {
+    reportBtn.addEventListener("click", () => {
+      const menu = document.getElementById("header-more-menu");
+      const btn = document.getElementById("header-more-btn");
+      if (menu) menu.classList.add("hidden");
+      if (btn) btn.setAttribute("aria-expanded", "false");
+      openReportPage();
+    });
+  }
+  if (addForm) addForm.addEventListener("submit", onAddTaskSubmit);
+  if (reportForm) reportForm.addEventListener("submit", onReportSubmit);
+  ["add-task-close", "add-task-cancel"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("click", () => closePage("add-task-page"));
+  });
+  ["report-close", "report-cancel"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("click", () => closePage("report-page"));
+  });
+  const reportDesc = document.getElementById("report-description");
+  if (reportDesc) reportDesc.addEventListener("input", updateReportCount);
+  const addPhoto = document.getElementById("add-task-photo");
+  const addPreview = document.getElementById("add-task-photo-preview");
+  if (addPhoto && addPreview) bindPhotoPreview(addPhoto, addPreview);
+  const reportPhoto = document.getElementById("report-photo");
+  const reportPreview = document.getElementById("report-photo-preview");
+  if (reportPhoto && reportPreview) bindPhotoPreview(reportPhoto, reportPreview);
+  ["add-task-page", "report-page"].forEach((id) => {
+    const page = document.getElementById(id);
+    if (!page) return;
+    page.addEventListener("click", (event) => {
+      if (event.target.id === id) closePage(id);
+    });
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const lightbox = document.getElementById("lightbox");
+    if (lightbox && !lightbox.classList.contains("hidden")) return;
+    const report = document.getElementById("report-page");
+    const add = document.getElementById("add-task-page");
+    if (report && !report.classList.contains("hidden")) {
+      closePage("report-page");
+      return;
+    }
+    if (add && !add.classList.contains("hidden")) closePage("add-task-page");
+  });
+}
+
 function setupUpdateBanner() {
   const banner = document.getElementById("update-banner");
   if (!banner) return;
@@ -595,7 +1007,9 @@ initStaffAuth({
   },
   onLoggedOut() {
     closeModal();
+    closeStaffPages();
     stopListeners();
     renderTasks();
   }
 });
+openScreenshotForm();

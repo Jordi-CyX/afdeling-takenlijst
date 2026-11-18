@@ -1,10 +1,12 @@
-const CACHE_NAME = "zeiklijst-v14";
+importScripts("./app-version.js");
+const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v15";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./app-version.js",
   "./staff-auth.js",
   "./shared.js",
   "./firebase-init.js",
