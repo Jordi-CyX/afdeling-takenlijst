@@ -11,13 +11,13 @@
   <meta name="description" content="Zeiklijst Admin — beheer van de afdelingstakenlijst">
   <title>Zeiklijst Admin</title>
   <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
-  <link rel="manifest" href="manifest.webmanifest?v=18">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=18">
-  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=18">
-  <link rel="icon" href="favicon.ico?v=18" sizes="any">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=18">
-  <link rel="stylesheet" href="../styles.css?v=18">
-  <link rel="stylesheet" href="admin.css?v=18">
+  <link rel="manifest" href="manifest.webmanifest?v=19">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=19">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=19">
+  <link rel="icon" href="favicon.ico?v=19" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=19">
+  <link rel="stylesheet" href="../styles.css?v=19">
+  <link rel="stylesheet" href="admin.css?v=19">
 </head>
 <body>
   <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
@@ -341,6 +341,20 @@
       </div>
     </div>
   </div>
+  <div id="code-dialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="code-dialog-title">
+    <div class="modal-content app-dialog-content code-dialog-content">
+      <h2 id="code-dialog-title">Startcode</h2>
+      <p class="code-dialog-label">Startcode (7 dagen geldig, eenmalig)</p>
+      <p id="code-dialog-name" class="code-dialog-name"></p>
+      <div id="code-dialog-code" class="start-code"></div>
+      <p id="code-dialog-expiry" class="code-dialog-expiry"></p>
+      <p class="code-dialog-help">De medewerker opent de Zeiklijst-app, typt zijn naam en vult deze code in bij het instellen van de pincode. Geef de code persoonlijk door, niet in een groepsapp.</p>
+      <div class="form-actions">
+        <button type="button" id="code-dialog-copy" class="secondary">Kopiëren</button>
+        <button type="button" id="code-dialog-close">Klaar</button>
+      </div>
+    </div>
+  </div>
   <div id="app-toast" class="app-toast hidden" role="status"></div>
 
   <div id="image-lightbox" class="lightbox hidden" role="dialog" aria-modal="true" aria-label="Vergrote foto">
@@ -348,6 +362,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=18"></script>
+  <script type="module" src="admin.js?v=19"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const CACHE_NAME = "zeiklijst-admin-v18";
+const CACHE_NAME = "zeiklijst-admin-v19";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",

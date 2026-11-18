@@ -7,7 +7,7 @@ import {
   signInWithEmailAndPassword,
   signOut
 } from "../firebase-init.js";
-import { increment, arrayUnion } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+import { increment, arrayUnion, deleteField, Timestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   db,
   doc,
@@ -26,8 +26,10 @@ import {
   serializeTemplate,
   readCompressedPhotos,
   assertDocSize,
-  escapeHtml,
-  escapeAttr,
+  generateStartCode,
+  formatStartCode,
+  isSafeImageDataUrl,
+  START_CODE_VALID_DAYS,
   formatDate,
   formatDateTime,
   assigneeLabel,
@@ -55,11 +57,87 @@ let generating = false;
 let seededOnce = false;
 let pinResetRequests = [];
 let nameIndexEntries = [];
+let startCodes = [];
 let employeesReady = false;
 let nameIndexReady = false;
 let nameIndexSyncing = false;
 let swUpdateHandlerBound = false;
 
+
+// ---- Veilig renderen ------------------------------------------------------
+// dom`...` bouwt DOM uit een vaste, eigen HTML-template. Ingevoegde waarden worden nooit
+// als HTML geparsed: in tekst worden ze tekstnodes (of geneste nodes uit dom``),
+// in attributen gaan ze via setAttribute. Dynamische on*-, style-, src- en href-attributen
+// zijn verboden; foto's gaan via safePhotoImg (img.src na isSafeImageDataUrl).
+const DOM_SLOT = `zlslot${Math.random().toString(36).slice(2, 10)}x`;
+const DOM_SLOT_RE = new RegExp(`${DOM_SLOT}(\\d+)_`, "g");
+const DOM_BLOCKED_ATTRS = new Set(["style", "src", "href", "srcdoc", "srcset", "action", "formaction", "xlink:href"]);
+
+function toNodes(value) {
+  if (value == null || value === false || value === "") return document.createTextNode("");
+  if (value instanceof Node) return value;
+  if (Array.isArray(value)) {
+    const frag = document.createDocumentFragment();
+    for (const item of value) frag.append(toNodes(item));
+    return frag;
+  }
+  return document.createTextNode(String(value));
+}
+
+function dom(strings, ...values) {
+  let src = "";
+  let inTag = false;
+  strings.forEach((part, i) => {
+    src += part;
+    for (const ch of part) {
+      if (ch === "<") inTag = true;
+      else if (ch === ">") inTag = false;
+    }
+    if (i < values.length) src += inTag ? `${DOM_SLOT}${i}_` : `<!--${DOM_SLOT}${i}-->`;
+  });
+  const tpl = document.createElement("template");
+  tpl.innerHTML = src; // alleen eigen markup + placeholders, nooit gebruikersdata
+  const frag = tpl.content;
+  const slots = [];
+  const walker = document.createTreeWalker(frag, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_COMMENT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (node.nodeType === Node.COMMENT_NODE) {
+      if (node.data.startsWith(DOM_SLOT)) slots.push(node);
+      continue;
+    }
+    for (const attr of [...node.attributes]) {
+      if (attr.name.includes(DOM_SLOT)) throw new Error("dom: dynamische attribuutnaam niet toegestaan");
+      if (!attr.value.includes(DOM_SLOT)) continue;
+      const name = attr.name.toLowerCase();
+      if (name.startsWith("on") || DOM_BLOCKED_ATTRS.has(name)) throw new Error(`dom: dynamisch ${name} niet toegestaan`);
+      node.setAttribute(attr.name, attr.value.replace(DOM_SLOT_RE, (_, idx) => {
+        const v = values[Number(idx)];
+        return v == null || v === false ? "" : String(v);
+      }));
+    }
+  }
+  for (const slot of slots) slot.replaceWith(toNodes(values[Number(slot.data.slice(DOM_SLOT.length))]));
+  return frag;
+}
+
+function safePhotoImg(src, { className = "", alt = "Foto", enlarge = true } = {}) {
+  if (!isSafeImageDataUrl(src)) return null;
+  const img = document.createElement("img");
+  if (className) img.className = className;
+  img.alt = alt;
+  img.src = src;
+  if (enlarge) img.addEventListener("click", () => openLightbox(src, alt));
+  return img;
+}
+
+function setOptions(select, items) {
+  select.replaceChildren(...items.map(([value, label]) => new Option(label, value)));
+}
+
+function safeStatus(status) {
+  return ["open", "pending", "afgerond"].includes(status) ? status : "open";
+}
 
 const SECTION_KEY = "zeiklijst-admin-section";
 const SECTIONS = ["dashboard", "medewerkers", "taken", "controle", "workflow", "meldingen", "data"];
@@ -190,6 +268,11 @@ function startListeners() {
     renderPinResets();
     syncNameIndex().catch(() => {});
   }, ignoreListenerError);
+  listenCollection("startCodes", normalizeStartCodeDoc, (list) => {
+    startCodes = list;
+    renderEmployees();
+    renderPinResets();
+  }, ignoreListenerError);
   listenCollection("pinResetRequests", normalizePinResetRequest, (list) => {
     pinResetRequests = list.slice().sort((a, b) => String(b.requestedAt || "").localeCompare(String(a.requestedAt || "")));
     renderPinResets();
@@ -257,7 +340,7 @@ function overdueTasks() {
 function dueDateLabel(task) {
   if (!isValidDueDate(task && task.dueDate)) return "";
   const overdue = isOverdue(task);
-  return `<div class="task-due-date${overdue ? " overdue" : ""}">Streefdatum ${escapeHtml(formatDueDate(task.dueDate))}</div>`;
+  return dom`<div class="${overdue ? "task-due-date overdue" : "task-due-date"}">Streefdatum ${formatDueDate(task.dueDate)}</div>`;
 }
 
 function newStaffCreatedTasks() {
@@ -275,8 +358,39 @@ function normalizeNameIndexEntry(id, data) {
     id,
     employeeId: d.employeeId || "",
     hasPin: d.hasPin === true,
-    pinVersion: Number.isFinite(Number(d.pinVersion)) ? Number(d.pinVersion) : 0
+    pinVersion: Number.isFinite(Number(d.pinVersion)) ? Number(d.pinVersion) : 0,
+    loginKey: typeof d.loginKey === "string" ? d.loginKey : ""
   };
+}
+
+function timestampToIso(value) {
+  if (!value) return "";
+  if (typeof value.toDate === "function") return value.toDate().toISOString();
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeStartCodeDoc(id, data) {
+  const d = data || {};
+  const expiresAt = timestampToIso(d.expiresAt);
+  return {
+    id,
+    employeeId: d.employeeId || "",
+    pinVersion: Number.isFinite(Number(d.pinVersion)) ? Number(d.pinVersion) : 0,
+    used: d.used === true,
+    createdAt: timestampToIso(d.createdAt),
+    usedAt: timestampToIso(d.usedAt),
+    expiresAt,
+    expiresAtMs: expiresAt ? Date.parse(expiresAt) : 0
+  };
+}
+
+function openStartCodeFor(emp) {
+  if (!emp) return null;
+  const now = Date.now();
+  const version = Number(emp.pinVersion) || 0;
+  return startCodes
+    .filter((c) => c.employeeId === emp.id && !c.used && c.expiresAtMs > now && c.pinVersion === version)
+    .sort((a, b) => b.expiresAtMs - a.expiresAtMs)[0] || null;
 }
 
 function normalizePinResetRequest(id, data) {
@@ -347,7 +461,8 @@ async function syncNameIndex({ force = false } = {}) {
         data: {
           employeeId: emp.id,
           hasPin: force ? Boolean(byId && byId.hasPin) : false,
-          pinVersion
+          pinVersion,
+          ...(force && byId && byId.loginKey ? { loginKey: byId.loginKey } : {})
         }
       });
       continue;
@@ -395,53 +510,139 @@ async function rebuildNameIndex() {
 
 function renderPinResets() {
   const targets = ["dashboard-pin-resets", "medewerkers-pin-resets"];
-  const html = pinResetRequests.length
-    ? `<h3>Pincode vergeten</h3>` + pinResetRequests.map((req) => `
-        <div class="pin-reset-item">
-          <p><strong>${escapeHtml(resetRequestName(req))}</strong> heeft pincode vergeten</p>
-          <button type="button" data-reset-pin="${escapeAttr(req.employeeId)}">Pincode resetten</button>
-        </div>
-      `).join("")
-    : "";
   for (const id of targets) {
     const el = document.getElementById(id);
     if (!el) continue;
-    el.innerHTML = html;
     el.classList.toggle("hidden", !pinResetRequests.length);
-    el.querySelectorAll("[data-reset-pin]").forEach((btn) => {
-      btn.onclick = () => resetEmployeePin(btn.dataset.resetPin);
-    });
+    if (!pinResetRequests.length) {
+      el.replaceChildren();
+      continue;
+    }
+    el.replaceChildren(dom`<h3>Pincode vergeten</h3>`, ...pinResetRequests.map(pinResetItem));
   }
 }
 
-async function resetEmployeePin(id) {
-  const emp = employees.find((e) => e.id === id);
+function pinResetItem(req) {
+  const emp = employees.find((e) => e.id === req.employeeId);
+  const when = req.requestedAt ? formatDateTime(req.requestedAt) : "";
+  const canIssue = Boolean(emp && emp.active);
+  const hint = !emp
+    ? "Onbekende medewerker. Wis het verzoek."
+    : (emp.active ? "Maak alleen een startcode als de medewerker het zelf aan je vraagt." : "Inactief: geen startcode mogelijk.");
+  const frag = dom`
+    <div class="pin-reset-item">
+      <p><strong>${resetRequestName(req)}</strong> heeft pincode vergeten${when ? " · " + when : ""}
+        <span class="pin-meta">${hint}</span></p>
+      <div class="pin-reset-actions">
+        ${canIssue ? dom`<button type="button" data-issue-code>Startcode maken</button>` : ""}
+        <button type="button" class="secondary" data-dismiss-reset>Verzoek wissen</button>
+      </div>
+    </div>`;
+  const issueBtn = frag.querySelector("[data-issue-code]");
+  if (issueBtn) issueBtn.onclick = () => issueStartCode(req.employeeId);
+  frag.querySelector("[data-dismiss-reset]").onclick = () => dismissResetRequest(req.employeeId);
+  return frag;
+}
+
+async function dismissResetRequest(id) {
   const req = pinResetRequests.find((r) => r.employeeId === id);
-  const name = (emp && emp.name) || (req && req.name) || id;
-  if (!emp && !req) return;
-  const confirmed = await confirmAction(
-    `Pincode van ${name} resetten? De medewerker moet daarna een nieuwe pincode instellen.`,
-    { title: "Pincode resetten", confirmText: "Pincode resetten", danger: true }
-  );
+  const name = req ? resetRequestName(req) : id;
+  const confirmed = await confirmAction(`Verzoek van ${name} wissen zonder startcode te maken?`, { title: "Verzoek wissen", confirmText: "Wissen" });
   if (!confirmed) return;
-  const pinVersion = (Number(emp && emp.pinVersion) || 0) + 1;
-  const key = emp ? nameIndexKey(emp.name) : (req && nameIndexKey(req.name));
+  await safeWrite(() => deleteDoc(doc(db, "pinResetRequests", id)));
+}
+
+// Pincode resetten = nieuwe startcode maken (zelfde batch).
+async function resetEmployeePin(id) {
+  return issueStartCode(id);
+}
+
+// Eén admin-batch: pinVersion+1, nameIndex (hasPin=false, loginKey weg), resetverzoek weg,
+// oudere codes van deze medewerker weg, nieuwe code met de nieuwe pinVersion.
+async function issueStartCode(employeeId) {
+  const emp = employees.find((e) => e.id === employeeId);
+  if (!emp) {
+    showToast("Medewerker niet gevonden.");
+    return;
+  }
+  if (emp.active === false) {
+    showToast(`${emp.name} is inactief. Activeer de medewerker eerst.`);
+    return;
+  }
+  const hasPin = employeeHasPin(emp);
+  const parts = [];
+  if (hasPin) parts.push(`De huidige pincode van ${emp.name} werkt daarna niet meer.`);
+  if (openStartCodeFor(emp)) parts.push("De vorige open startcode vervalt.");
+  parts.push("Geef de code alleen persoonlijk aan de medewerker.");
+  const confirmed = await confirmAction(`Startcode maken voor ${emp.name}? ${parts.join(" ")}`, {
+    title: hasPin ? "Pincode resetten" : "Startcode maken",
+    confirmText: "Startcode maken",
+    danger: hasPin
+  });
+  if (!confirmed) return;
+  const pinVersion = (Number(emp.pinVersion) || 0) + 1;
+  const code = generateStartCode();
+  const createdAt = Timestamp.now();
+  const expiresAt = Timestamp.fromMillis(createdAt.toMillis() + START_CODE_VALID_DAYS * 86400000);
+  const key = nameIndexKey(emp.name);
   const ok = await safeWrite(async () => {
     const batch = writeBatch(db);
-    if (emp) {
-      batch.update(doc(db, "employees", emp.id), { pinVersion });
-    }
+    batch.update(doc(db, "employees", emp.id), { pinVersion });
     if (key) {
       batch.set(doc(db, "nameIndex", key), {
-        employeeId: id,
+        employeeId: emp.id,
         hasPin: false,
-        pinVersion
+        pinVersion,
+        loginKey: deleteField()
       }, { merge: true });
     }
-    batch.delete(doc(db, "pinResetRequests", id));
+    batch.delete(doc(db, "pinResetRequests", emp.id));
+    for (const old of startCodes.filter((c) => c.employeeId === emp.id && c.id !== code)) {
+      batch.delete(doc(db, "startCodes", old.id));
+    }
+    batch.set(doc(db, "startCodes", code), { employeeId: emp.id, pinVersion, createdAt, expiresAt, used: false });
     await batch.commit();
   });
-  if (ok) showToast(`Pincode van ${name} is gereset.`, "ok");
+  if (ok) showStartCode({ name: emp.name, code, expiresAt: expiresAt.toDate().toISOString() });
+}
+
+function showStartCode({ name, code, expiresAt }) {
+  const dialog = document.getElementById("code-dialog");
+  if (!dialog) return;
+  const formatted = formatStartCode(code);
+  document.getElementById("code-dialog-name").textContent = name ? `Voor ${name}` : "";
+  document.getElementById("code-dialog-code").textContent = formatted;
+  document.getElementById("code-dialog-expiry").textContent = expiresAt ? `Geldig tot ${formatDateTime(expiresAt)}` : "";
+  const copyBtn = document.getElementById("code-dialog-copy");
+  copyBtn.textContent = "Kopiëren";
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(formatted);
+      copyBtn.textContent = "Gekopieerd";
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById("code-dialog-code"));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      showToast("Kopiëren lukte niet. De code is geselecteerd.");
+    }
+  };
+  document.getElementById("code-dialog-close").onclick = () => dialog.classList.add("hidden");
+  dialog.classList.remove("hidden");
+}
+
+async function deleteStartCode(codeId) {
+  const code = startCodes.find((c) => c.id === codeId);
+  if (!code) return;
+  const emp = employees.find((e) => e.id === code.employeeId);
+  const confirmed = await confirmAction(
+    `Startcode van ${emp ? emp.name : "deze medewerker"} verwijderen? Met deze code kan dan geen pincode meer worden ingesteld.`,
+    { title: "Startcode verwijderen", confirmText: "Verwijderen", danger: true }
+  );
+  if (!confirmed) return;
+  const ok = await safeWrite(() => deleteDoc(doc(db, "startCodes", codeId)));
+  if (ok) showToast("Startcode verwijderd.", "ok");
 }
 
 
@@ -653,18 +854,18 @@ function activeEmployees() {
 
 function fillAssigneeSelects() {
   const options = [
-    `<option value="">Niet toegewezen</option>`,
-    `<option value="ALLEN">Allen</option>`,
-    ...activeEmployees().map((e) => `<option value="${escapeAttr(e.id)}">${escapeHtml(e.name)}</option>`)
-  ].join("");
+    ["", "Niet toegewezen"],
+    ["ALLEN", "Allen"],
+    ...activeEmployees().map((e) => [e.id, e.name])
+  ];
   const formSelect = document.getElementById("assignee-select");
   const current = formSelect.value;
-  formSelect.innerHTML = options;
+  setOptions(formSelect, options);
   if ([...formSelect.options].some((o) => o.value === current)) formSelect.value = current;
   const reassign = document.getElementById("reassign-select");
   if (reassign) {
     const rec = reassign.value;
-    reassign.innerHTML = options;
+    setOptions(reassign, options);
     if ([...reassign.options].some((o) => o.value === rec)) reassign.value = rec;
   }
 }
@@ -1066,11 +1267,11 @@ function renderDashboard() {
   const overdueBox = document.getElementById("dashboard-overdue");
   if (overdueBox) {
     if (!overdue.length) {
-      overdueBox.innerHTML = "";
+      overdueBox.replaceChildren();
       overdueBox.classList.add("hidden");
     } else {
       overdueBox.classList.remove("hidden");
-      overdueBox.innerHTML = `<h3>Streefdatum verstreken</h3>` + overdue.map(taskItemHtml).join("");
+      overdueBox.replaceChildren(dom`<h3>Streefdatum verstreken</h3>`, ...overdue.map(taskItem));
       bindTaskItems(overdueBox);
     }
   }
@@ -1079,12 +1280,11 @@ function renderDashboard() {
   if (!rows.length) {
     workload.innerHTML = '<p class="empty-state">Nog geen taken om te verdelen.</p>';
   } else {
-    workload.innerHTML = rows.map((g) => `
-      <button type="button" class="workload-row" data-workload="${escapeAttr(g.key)}">
-        <span>${escapeHtml(g.label)}</span>
+    workload.replaceChildren(...rows.map((g) => dom`
+      <button type="button" class="workload-row" data-workload="${g.key}">
+        <span>${g.label}</span>
         <span class="counts">${g.open} open · ${g.pending} pending</span>
-      </button>
-    `).join("");
+      </button>`));
     workload.querySelectorAll("[data-workload]").forEach((btn) => {
       btn.onclick = () => showSection("taken", true, { filters: { status: "all", employee: btn.dataset.workload } });
     });
@@ -1098,7 +1298,7 @@ function renderDashboard() {
     pendingBox.innerHTML = '<p class="empty-state">Geen pending taken.</p>';
     return;
   }
-  pendingBox.innerHTML = latest.map(taskItemHtml).join("");
+  pendingBox.replaceChildren(...latest.map(taskItem));
   bindTaskItems(pendingBox);
 }
 
@@ -1111,32 +1311,32 @@ function renderStaffCreated() {
   if (!box) return;
   const items = newStaffCreatedTasks();
   if (!items.length) {
-    box.innerHTML = "";
+    box.replaceChildren();
     box.classList.add("hidden");
     return;
   }
   box.classList.remove("hidden");
-  box.innerHTML = `<h3>Aangemaakte taken</h3>` + items.map((task) => {
+  box.replaceChildren(dom`<h3>Aangemaakte taken</h3>`, ...items.map((task) => {
     const location = (task.location || "").trim();
     const when = task.createdAt ? formatDateTime(task.createdAt) : "";
-    return `
+    const frag = dom`
       <div class="staff-created-item">
-        <h4>${escapeHtml(task.title)}</h4>
-        ${location ? `<p class="staff-created-meta">${escapeHtml(location)}</p>` : ""}
-        <p class="staff-created-meta">Door ${escapeHtml(staffCreatorLabel(task))} aangemaakt${when ? " · " + escapeHtml(when) : ""}</p>
+        <h4>${task.title}</h4>
+        ${location ? dom`<p class="staff-created-meta">${location}</p>` : ""}
+        <p class="staff-created-meta">Door ${staffCreatorLabel(task)} aangemaakt${when ? " · " + when : ""}</p>
         <div class="staff-created-actions">
-          <button type="button" class="secondary" data-review="gezien" data-task-id="${escapeAttr(task.id)}">Gezien</button>
-          <button type="button" data-review="afgehandeld" data-task-id="${escapeAttr(task.id)}">Afgehandeld</button>
+          <button type="button" class="secondary" data-review="gezien">Gezien</button>
+          <button type="button" data-review="afgehandeld">Afgehandeld</button>
         </div>
-      </div>
-    `;
-  }).join("");
-  box.querySelectorAll("[data-review]").forEach((btn) => {
-    btn.onclick = (event) => {
-      event.stopPropagation();
-      setAdminReview(btn.dataset.taskId, btn.dataset.review);
-    };
-  });
+      </div>`;
+    frag.querySelectorAll("[data-review]").forEach((btn) => {
+      btn.onclick = (event) => {
+        event.stopPropagation();
+        setAdminReview(task.id, btn.dataset.review);
+      };
+    });
+    return frag;
+  }));
 }
 
 async function setAdminReview(id, review) {
@@ -1161,39 +1361,32 @@ function renderReports() {
     list.innerHTML = '<p class="empty-state">Geen meldingen in deze filter.</p>';
     return;
   }
-  list.innerHTML = filtered.map((report) => {
+  list.replaceChildren(...filtered.map((report) => {
     const when = report.createdAt ? formatDateTime(report.createdAt) : "";
-    const photo = report.photo && String(report.photo).startsWith("data:image")
-      ? `<img class="report-photo" src="${report.photo}" alt="Foto bij melding" data-enlarge="1">`
-      : "";
-    return `
-      <article class="report-item ${escapeAttr(report.status)}">
-        <p>${escapeHtml(report.description).replace(/\\n/g, "<br>")}</p>
-        ${photo}
-        <p class="report-meta">${escapeHtml(report.employeeName || "Medewerker")}${when ? " · " + escapeHtml(when) : ""}</p>
-        <p class="report-meta">App ${escapeHtml(report.appVersion || "onbekend")}${report.device ? " · " + escapeHtml(report.device) : ""}</p>
+    const status = ["nieuw", "in_behandeling", "opgelost"].includes(report.status) ? report.status : "nieuw";
+    const frag = dom`
+      <article class="report-item ${status}">
+        <p class="pre-line">${report.description}</p>
+        ${safePhotoImg(report.photo, { className: "report-photo", alt: "Foto bij melding" })}
+        <p class="report-meta">${report.employeeName || "Medewerker"}${when ? " · " + when : ""}</p>
+        <p class="report-meta">App ${report.appVersion || "onbekend"}${report.device ? " · " + report.device : ""}</p>
         <label class="report-status">Status
-          <select data-report-status="${escapeAttr(report.id)}">
-            <option value="nieuw"${report.status === "nieuw" ? " selected" : ""}>Nieuw</option>
-            <option value="in_behandeling"${report.status === "in_behandeling" ? " selected" : ""}>In behandeling</option>
-            <option value="opgelost"${report.status === "opgelost" ? " selected" : ""}>Opgelost</option>
+          <select>
+            <option value="nieuw">Nieuw</option>
+            <option value="in_behandeling">In behandeling</option>
+            <option value="opgelost">Opgelost</option>
           </select>
         </label>
         <div class="report-actions">
-          <button type="button" class="danger secondary" data-delete-report="${escapeAttr(report.id)}">Verwijderen</button>
+          <button type="button" class="danger secondary" data-delete-report>Verwijderen</button>
         </div>
-      </article>
-    `;
-  }).join("");
-  list.querySelectorAll("[data-report-status]").forEach((sel) => {
-    sel.onchange = () => updateReportStatus(sel.dataset.reportStatus, sel.value);
-  });
-  list.querySelectorAll("[data-delete-report]").forEach((btn) => {
-    btn.onclick = () => deleteReport(btn.dataset.deleteReport);
-  });
-  list.querySelectorAll("[data-enlarge]").forEach((img) => {
-    img.onclick = () => openLightbox(img.getAttribute("src"), img.getAttribute("alt") || "Foto");
-  });
+      </article>`;
+    const sel = frag.querySelector("select");
+    sel.value = status;
+    sel.onchange = () => updateReportStatus(report.id, sel.value);
+    frag.querySelector("[data-delete-report]").onclick = () => deleteReport(report.id);
+    return frag;
+  }));
 }
 
 async function updateReportStatus(id, status) {
@@ -1214,7 +1407,7 @@ async function deleteReport(id) {
 function openLightbox(src, alt) {
   const box = document.getElementById("image-lightbox");
   const img = document.getElementById("lightbox-image");
-  if (!box || !img || !src) return;
+  if (!box || !img || !isSafeImageDataUrl(src)) return;
   img.src = src;
   img.alt = alt || "";
   box.classList.remove("hidden");
@@ -1313,9 +1506,9 @@ function renderWorkflow() {
     return;
   }
   const tickerItems = [...tickers.values()].sort((a, b) => a.name.localeCompare(b.name, "nl"));
-  list.innerHTML = items.map((g) => `
+  list.replaceChildren(...items.map((g) => dom`
     <article class="workflow-card">
-      <h3>${escapeHtml(g.label)}</h3>
+      <h3>${g.label}</h3>
       <div class="workflow-metrics wide">
         <div class="workflow-metric">
           <span class="value">${g.open}</span>
@@ -1334,12 +1527,11 @@ function renderWorkflow() {
           <span class="label">Afgekeurd</span>
         </div>
       </div>
-    </article>
-  `).join("") + (tickerItems.length ? `
+    </article>`), tickerItems.length ? dom`
     <h3 class="workflow-tickers">Afgevinkt door</h3>
-    ${tickerItems.map((g) => `
+    ${tickerItems.map((g) => dom`
       <article class="workflow-card">
-        <h3>${escapeHtml(g.name)}</h3>
+        <h3>${g.name}</h3>
         <div class="workflow-metrics">
           <div class="workflow-metric">
             <span class="value">${g.pending}</span>
@@ -1350,9 +1542,7 @@ function renderWorkflow() {
             <span class="label">Afgerond in periode</span>
           </div>
         </div>
-      </article>
-    `).join("")}
-  ` : "");
+      </article>`)}` : "");
 }
 
 function renderControle() {
@@ -1365,15 +1555,14 @@ function renderControle() {
     list.innerHTML = '<p class="empty-state">Geen pending taken. Alles is bij.</p>';
     return;
   }
-  list.innerHTML = pending.map((task) => `
+  list.replaceChildren(...pending.map((task) => dom`
     <div class="controle-item">
-      ${taskItemHtml(task)}
+      ${taskItem(task)}
       <div class="controle-actions">
-        <button type="button" class="success" data-approve="${escapeAttr(task.id)}">Goedkeuren</button>
-        <button type="button" class="secondary" data-reject="${escapeAttr(task.id)}">Afwijzen</button>
+        <button type="button" class="success" data-approve="${task.id}">Goedkeuren</button>
+        <button type="button" class="secondary" data-reject="${task.id}">Afwijzen</button>
       </div>
-    </div>
-  `).join("");
+    </div>`));
   bindTaskItems(list);
   list.querySelectorAll("[data-approve]").forEach((btn) => {
     btn.onclick = (event) => {
@@ -1396,7 +1585,7 @@ function isRecurring(task) {
 function locationLabel(item) {
   const location = (item && item.location || "").trim();
   if (!location) return "";
-  return `<div class="task-location">${escapeHtml(location)}</div>`;
+  return dom`<div class="task-location">${location}</div>`;
 }
 
 function assigneeBanner(task) {
@@ -1405,29 +1594,25 @@ function assigneeBanner(task) {
   const unassigned = !isAllen && !name;
   const label = unassigned ? "Niet toegewezen" : (isAllen ? "Allen" : name);
   const cls = unassigned ? " task-assignee--muted" : "";
-  return `<div class="task-assignee${cls}">${escapeHtml(label)}</div>`;
+  return dom`<div class="task-assignee${cls}">${label}</div>`;
 }
 
-function taskItemHtml(task) {
-  const badges = [
-    `<span class="badge ${task.status}">${task.status === "open" ? "Open" : task.status === "pending" ? "Pending" : "Afgerond"}</span>`
-  ];
-  if (isRecurring(task)) badges.unshift('<span class="badge recurring">Herhalend</span>');
-  if (isOverdue(task)) badges.push('<span class="badge overdue">Verstreken</span>');
-  return `
-    <div class="task-item ${task.status}" role="button" tabindex="0" data-task-id="${escapeAttr(task.id)}">
+function taskItem(task) {
+  const status = safeStatus(task.status);
+  const label = status === "open" ? "Open" : status === "pending" ? "Pending" : "Afgerond";
+  return dom`
+    <div class="task-item ${status}" role="button" tabindex="0" data-task-id="${task.id}">
       <div class="task-item-main">
         <div>
-          <div class="task-title">${escapeHtml(task.title)}</div>
+          <div class="task-title">${task.title}</div>
           ${locationLabel(task)}
           ${dueDateLabel(task)}
-          ${isStaffCreatedTask(task) ? `<div class="task-created-by">Door ${escapeHtml(staffCreatorLabel(task))} aangemaakt</div>` : ""}
+          ${isStaffCreatedTask(task) ? dom`<div class="task-created-by">Door ${staffCreatorLabel(task)} aangemaakt</div>` : ""}
         </div>
-        <div class="badge-row">${badges.join("")}</div>
+        <div class="badge-row">${isRecurring(task) ? dom`<span class="badge recurring">Herhalend</span>` : ""}<span class="badge ${status}">${label}</span>${isOverdue(task) ? dom`<span class="badge overdue">Verstreken</span>` : ""}</div>
       </div>
       ${assigneeBanner(task)}
-    </div>
-  `;
+    </div>`;
 }
 
 function bindTaskItems(container) {
@@ -1483,13 +1668,12 @@ function fillTaskFilters() {
   const empSelect = document.getElementById("filter-employee");
   if (!empSelect) return;
   const previous = taskFilters.employee || "all";
-  const options = [
-    `<option value="all">Iedereen</option>`,
-    `<option value="ALLEN">Allen</option>`,
-    `<option value="UNASSIGNED">Niet toegewezen</option>`,
-    ...employees.filter((e) => e.active).map((e) => `<option value="${escapeAttr(e.id)}">${escapeHtml(e.name)}</option>`)
-  ];
-  empSelect.innerHTML = options.join("");
+  setOptions(empSelect, [
+    ["all", "Iedereen"],
+    ["ALLEN", "Allen"],
+    ["UNASSIGNED", "Niet toegewezen"],
+    ...employees.filter((e) => e.active).map((e) => [e.id, e.name])
+  ]);
   if ([...empSelect.options].some((o) => o.value === previous)) empSelect.value = previous;
   else empSelect.value = "all";
   taskFilters.employee = empSelect.value;
@@ -1497,11 +1681,11 @@ function fillTaskFilters() {
   const locSelect = document.getElementById("filter-location");
   const locations = [...new Set(tasks.map((task) => (task.location || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "nl"));
   const prevLoc = taskFilters.location || "all";
-  locSelect.innerHTML = [
-    `<option value="all">Alle locaties</option>`,
-    `<option value="__none__">Geen locatie</option>`,
-    ...locations.map((loc) => `<option value="${escapeAttr(loc)}">${escapeHtml(loc)}</option>`)
-  ].join("");
+  setOptions(locSelect, [
+    ["all", "Alle locaties"],
+    ["__none__", "Geen locatie"],
+    ...locations.map((loc) => [loc, loc])
+  ]);
   if ([...locSelect.options].some((o) => o.value === prevLoc)) locSelect.value = prevLoc;
   else locSelect.value = "all";
   taskFilters.location = locSelect.value;
@@ -1532,7 +1716,7 @@ function renderTasks() {
     list.innerHTML = '<p class="empty-state">Geen taken die aan de filters voldoen.</p>';
     return;
   }
-  list.innerHTML = active.map(taskItemHtml).join("");
+  list.replaceChildren(...active.map(taskItem));
   bindTaskItems(list);
 }
 
@@ -1546,7 +1730,7 @@ function renderCompleted() {
     list.innerHTML = '<p class="empty-state">Nog geen afgeronde taken.</p>';
     return;
   }
-  list.innerHTML = done.map(taskItemHtml).join("");
+  list.replaceChildren(...done.map(taskItem));
   bindTaskItems(list);
 }
 
@@ -1556,28 +1740,27 @@ function renderTemplates() {
     list.innerHTML = '<p class="empty-state">Nog geen terugkerende taken. Vink bij een nieuwe taak "Herhalende taak" aan.</p>';
     return;
   }
-  list.innerHTML = templates.map((template) => `
+  list.replaceChildren(...templates.map((template) => dom`
     <div class="template-item">
       <div class="template-top">
         <div>
-          <div class="task-title">${escapeHtml(template.title)}</div>
+          <div class="task-title">${template.title}</div>
           ${locationLabel(template)}
           <div class="task-meta">
-            ${escapeHtml(assigneeLabel(template))}
-            · ${escapeHtml(describeRecurrence(template))}
+            ${assigneeLabel(template)}
+            · ${describeRecurrence(template)}
           </div>
         </div>
         <div class="badge-row">
-          ${template.paused ? '<span class="badge paused">Gepauzeerd</span>' : '<span class="badge recurring">Actief</span>'}
+          ${template.paused ? dom`<span class="badge paused">Gepauzeerd</span>` : dom`<span class="badge recurring">Actief</span>`}
         </div>
       </div>
       <div class="template-actions">
-        <button type="button" class="secondary" data-edit-template="${escapeAttr(template.id)}">Bewerken</button>
-        <button type="button" class="secondary" data-pause-template="${escapeAttr(template.id)}">${template.paused ? "Hervatten" : "Pauzeren"}</button>
-        <button type="button" class="danger" data-delete-template="${escapeAttr(template.id)}">Verwijderen</button>
+        <button type="button" class="secondary" data-edit-template="${template.id}">Bewerken</button>
+        <button type="button" class="secondary" data-pause-template="${template.id}">${template.paused ? "Hervatten" : "Pauzeren"}</button>
+        <button type="button" class="danger" data-delete-template="${template.id}">Verwijderen</button>
       </div>
-    </div>
-  `).join("");
+    </div>`));
   list.querySelectorAll("[data-edit-template]").forEach((btn) => {
     btn.onclick = () => startEditTemplate(btn.dataset.editTemplate);
   });
@@ -1591,42 +1774,53 @@ function renderTemplates() {
 
 function renderEmployees() {
   const list = document.getElementById("employee-list");
+  if (!list) return;
   if (!employees.length) {
     list.innerHTML = '<p class="empty-state">Nog geen medewerkers. Vul de standaardlijst of voeg zelf namen toe.</p>';
     return;
   }
-  list.innerHTML = employees.map((emp) => {
-    const hasPin = employeeHasPin(emp);
-    return `
+  list.replaceChildren(...employees.map(employeeItem));
+}
+
+function employeeItem(emp) {
+  const entry = nameIndexForEmployee(emp);
+  const hasPin = Boolean(entry && entry.hasPin);
+  const legacy = hasPin && !(entry && entry.loginKey);
+  const open = openStartCodeFor(emp);
+  let pinText = "Nog geen pincode";
+  if (hasPin) pinText = legacy ? "Pincode ingesteld (oude methode, zonder startcode)" : "Pincode ingesteld met startcode";
+  else if (open) pinText = "Wacht op pincode met startcode";
+  const frag = dom`
     <div class="employee-item">
       <div class="employee-top">
         <div>
-          <div class="task-title">${escapeHtml(emp.name)}</div>
-          <p class="employee-pin${hasPin ? " set" : ""}">${hasPin ? "Pincode ingesteld" : "Nog geen pincode"}</p>
+          <div class="task-title">${emp.name}</div>
+          <p class="${hasPin ? "employee-pin set" : "employee-pin"}">${pinText}</p>
+          ${open ? dom`<p class="employee-code">Open startcode · geldig tot ${formatDateTime(open.expiresAt)}</p>` : ""}
+          ${!emp.active ? dom`<p class="employee-code muted">Inactief: inloggen geblokkeerd, geen startcode mogelijk</p>` : ""}
         </div>
         <span class="badge ${emp.active ? "open" : "paused"}">${emp.active ? "Actief" : "Inactief"}</span>
       </div>
       <div class="employee-actions">
-        <button type="button" class="secondary" data-rename-emp="${escapeAttr(emp.id)}">Hernoemen</button>
-        <button type="button" class="secondary" data-reset-emp="${escapeAttr(emp.id)}">Pincode resetten</button>
-        <button type="button" class="secondary" data-toggle-emp="${escapeAttr(emp.id)}">${emp.active ? "Deactiveren" : "Activeren"}</button>
-        <button type="button" class="danger" data-delete-emp="${escapeAttr(emp.id)}">Verwijderen</button>
+        ${emp.active ? dom`<button type="button" data-act="code" title="Startcode (7 dagen geldig, eenmalig)">${hasPin ? "Pincode resetten (startcode)" : "Startcode maken"}</button>` : ""}
+        ${open ? dom`<button type="button" class="secondary" data-act="show-code">Code tonen</button>` : ""}
+        ${open ? dom`<button type="button" class="secondary" data-act="delete-code">Code verwijderen</button>` : ""}
+        <button type="button" class="secondary" data-act="rename">Hernoemen</button>
+        <button type="button" class="secondary" data-act="toggle">${emp.active ? "Deactiveren" : "Activeren"}</button>
+        <button type="button" class="danger" data-act="delete">Verwijderen</button>
       </div>
-    </div>
-  `;
-  }).join("");
-  list.querySelectorAll("[data-rename-emp]").forEach((btn) => {
-    btn.onclick = () => renameEmployee(btn.dataset.renameEmp);
-  });
-  list.querySelectorAll("[data-reset-emp]").forEach((btn) => {
-    btn.onclick = () => resetEmployeePin(btn.dataset.resetEmp);
-  });
-  list.querySelectorAll("[data-toggle-emp]").forEach((btn) => {
-    btn.onclick = () => toggleEmployee(btn.dataset.toggleEmp);
-  });
-  list.querySelectorAll("[data-delete-emp]").forEach((btn) => {
-    btn.onclick = () => removeEmployee(btn.dataset.deleteEmp);
-  });
+    </div>`;
+  const on = (act, fn) => {
+    const btn = frag.querySelector(`[data-act="${act}"]`);
+    if (btn) btn.onclick = fn;
+  };
+  on("code", () => issueStartCode(emp.id));
+  on("show-code", () => open && showStartCode({ name: emp.name, code: open.id, expiresAt: open.expiresAt }));
+  on("delete-code", () => open && deleteStartCode(open.id));
+  on("rename", () => renameEmployee(emp.id));
+  on("toggle", () => toggleEmployee(emp.id));
+  on("delete", () => removeEmployee(emp.id));
+  return frag;
 }
 
 async function addEmployee(event) {
@@ -1718,7 +1912,8 @@ async function renameEmployee(id) {
       await add(doc(db, "nameIndex", newKey), {
         employeeId: id,
         hasPin: Boolean(existingIndex && existingIndex.hasPin),
-        pinVersion: Number(emp.pinVersion) || 0
+        pinVersion: Number(emp.pinVersion) || 0,
+        ...(existingIndex && existingIndex.loginKey ? { loginKey: existingIndex.loginKey } : {})
       }, "set");
       await add(doc(db, "nameIndex", oldKey), {}, "delete");
     }
@@ -1739,7 +1934,23 @@ async function renameEmployee(id) {
 async function toggleEmployee(id) {
   const emp = employees.find((e) => e.id === id);
   if (!emp) return;
-  await safeWrite(() => updateDoc(doc(db, "employees", id), { active: !emp.active }));
+  if (emp.active) {
+    const confirmed = await confirmAction(
+      `${emp.name} deactiveren? Inloggen in de medewerkers-app wordt geblokkeerd en open startcodes vervallen.`,
+      { title: "Deactiveren", confirmText: "Deactiveren", danger: true }
+    );
+    if (!confirmed) return;
+  }
+  await safeWrite(async () => {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "employees", id), { active: !emp.active });
+    if (emp.active) {
+      for (const code of startCodes.filter((c) => c.employeeId === id && !c.used)) {
+        batch.delete(doc(db, "startCodes", code.id));
+      }
+    }
+    await batch.commit();
+  });
 }
 
 async function removeEmployee(id) {
@@ -1753,6 +1964,9 @@ async function removeEmployee(id) {
     batch.delete(doc(db, "employees", id));
     if (key) batch.delete(doc(db, "nameIndex", key));
     batch.delete(doc(db, "pinResetRequests", id));
+    for (const code of startCodes.filter((c) => c.employeeId === id)) {
+      batch.delete(doc(db, "startCodes", code.id));
+    }
     await batch.commit();
   });
 }
@@ -1767,33 +1981,36 @@ function openTask(id) {
   locationEl.textContent = location;
   locationEl.classList.toggle("hidden", !location);
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
-  const statusBadges = [`<span class="badge ${task.status}">${task.status === "open" ? "Open" : task.status === "pending" ? "Pending" : "Afgerond"}</span>`];
-  if (isRecurring(task)) statusBadges.push('<span class="badge recurring">Herhalend</span>');
-  if (isOverdue(task)) statusBadges.push('<span class="badge overdue">Verstreken</span>');
+  const status = safeStatus(task.status);
+  const statusBadges = [dom`<span class="badge ${status}">${status === "open" ? "Open" : status === "pending" ? "Pending" : "Afgerond"}</span>`];
+  if (isRecurring(task)) statusBadges.push(dom`<span class="badge recurring">Herhalend</span>`);
+  if (isOverdue(task)) statusBadges.push(dom`<span class="badge overdue">Verstreken</span>`);
   if (task.rejectedCount || task.lastRejectedAt || (Array.isArray(task.rejections) && task.rejections.length)) {
-    statusBadges.push('<span class="badge paused">Afgewezen</span>');
+    statusBadges.push(dom`<span class="badge paused">Afgewezen</span>`);
   }
-  document.getElementById("modal-status").innerHTML = statusBadges.join("");
+  document.getElementById("modal-status").replaceChildren(...statusBadges);
   const extra = [];
   if (isValidDueDate(task.dueDate)) {
-    extra.push(`Streefdatum ${escapeHtml(formatDueDate(task.dueDate))}${isOverdue(task) ? " (verstreken)" : ""}`);
+    extra.push(`Streefdatum ${formatDueDate(task.dueDate)}${isOverdue(task) ? " (verstreken)" : ""}`);
   }
-  if (task.createdAt) extra.push(`Aangemaakt op ${escapeHtml(formatDateTime(task.createdAt))}`);
+  if (task.createdAt) extra.push(`Aangemaakt op ${formatDateTime(task.createdAt)}`);
   if (isStaffCreatedTask(task)) {
-    extra.push(`Door ${escapeHtml(staffCreatorLabel(task))} aangemaakt`);
-    if (task.adminReview) extra.push(`Admin-review: ${escapeHtml(task.adminReview)}`);
+    extra.push(`Door ${staffCreatorLabel(task)} aangemaakt`);
+    if (task.adminReview) extra.push(`Admin-review: ${task.adminReview}`);
   }
   if (task.pendingAt) {
-    extra.push(`Afgevinkt op ${escapeHtml(formatDateTime(task.pendingAt))}${task.pendingBy ? " door " + escapeHtml(task.pendingBy) : ""}`);
+    extra.push(`Afgevinkt op ${formatDateTime(task.pendingAt)}${task.pendingBy ? " door " + task.pendingBy : ""}`);
   }
-  if (task.completedAt) extra.push(`Goedgekeurd op ${escapeHtml(formatDateTime(task.completedAt))}`);
-  document.getElementById("modal-description").innerHTML =
-    `<p>${escapeHtml(task.description || "").replace(/\n/g, "<br>")}</p>` +
-    (extra.length ? `<div class="task-meta">${extra.join("<br>")}</div>` : "");
+  if (task.completedAt) extra.push(`Goedgekeurd op ${formatDateTime(task.completedAt)}`);
+  document.getElementById("modal-description").replaceChildren(dom`
+    <p class="pre-line">${task.description || ""}</p>
+    ${extra.length ? dom`<div class="task-meta pre-line">${extra.join("\n")}</div>` : ""}`);
   const historyEl = document.getElementById("modal-rejections");
-  historyEl.innerHTML = rejectionHistoryHtml(task);
-  const photos = (task.photos || []).filter((src) => typeof src === "string" && src.startsWith("data:image"));
-  document.getElementById("modal-photos").innerHTML = photos.map((src) => `<img src="${src}" alt="Foto bij taak">`).join("");
+  historyEl.replaceChildren(rejectionHistory(task));
+  const photos = (Array.isArray(task.photos) ? task.photos : [])
+    .map((src) => safePhotoImg(src, { alt: "Foto bij taak" }))
+    .filter(Boolean);
+  document.getElementById("modal-photos").replaceChildren(...photos);
   fillAssigneeSelects();
   document.getElementById("reassign-select").value = task.assigneeId || "";
 
@@ -1836,7 +2053,7 @@ function openTask(id) {
   document.getElementById("modal").classList.remove("hidden");
 }
 
-function rejectionHistoryHtml(task) {
+function rejectionHistory(task) {
   const items = Array.isArray(task.rejections) ? task.rejections.filter(Boolean).map((item) => ({
     at: item.at || "",
     by: item.by || "",
@@ -1847,16 +2064,16 @@ function rejectionHistoryHtml(task) {
   }
   if (!items.length) return "";
   items.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
-  return `<div class="rejection-history">
+  return dom`<div class="rejection-history">
     <h3>Afwijzingen</h3>
     <ul>${items.map((item) => {
-      const reason = (item.reason || "").trim();
-      const meta = [item.at ? formatDateTime(item.at) : "", item.by].filter(Boolean).join(" · ");
-      return `<li>
-        ${meta ? `<div class="task-meta">${escapeHtml(meta)}</div>` : ""}
-        <p>${reason ? escapeHtml(reason) : "Geen reden opgegeven"}</p>
+      const reason = String(item.reason || "").trim();
+      const meta = [item.at ? formatDateTime(item.at) : "", String(item.by || "")].filter(Boolean).join(" · ");
+      return dom`<li>
+        ${meta ? dom`<div class="task-meta">${meta}</div>` : ""}
+        <p class="pre-line">${reason || "Geen reden opgegeven"}</p>
       </li>`;
-    }).join("")}</ul>
+    })}</ul>
   </div>`;
 }
 

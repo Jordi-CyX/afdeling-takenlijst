@@ -720,3 +720,78 @@ button.stat-card:active {
   color: var(--magenta, #C40070);
   font-weight: 700;
 }
+
+/* --- Stap 2: startcodes en veilig renderen --- */
+.pre-line { white-space: pre-line; }
+
+.pin-reset-item .pin-meta { display: block; }
+
+.pin-reset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.employee-code {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #A85E00;
+}
+
+.employee-code.muted {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+#code-dialog { z-index: 1250; }
+
+.code-dialog-content { text-align: center; }
+
+.code-dialog-label {
+  margin: 0.2rem 0 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.code-dialog-name {
+  margin: 0.35rem 0 0;
+  font-weight: 700;
+}
+
+.start-code {
+  margin: 0.9rem auto 0.4rem;
+  padding: 0.85rem 1rem;
+  max-width: 100%;
+  border-radius: 12px;
+  background: var(--anthracite, #231F20);
+  color: var(--accent, #F99D27);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: clamp(1.6rem, 8vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  user-select: all;
+  -webkit-user-select: all;
+  overflow-wrap: anywhere;
+}
+
+.code-dialog-expiry {
+  margin: 0.2rem 0 0.6rem;
+  font-weight: 700;
+}
+
+.code-dialog-help {
+  margin: 0 0 1rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.code-dialog-content .form-actions { justify-content: center; }
+
+/* Secundaire knoppen in dialogen leesbaar op lichte achtergrond */
+.modal button.secondary {
+  background: #fff;
+  color: var(--anthracite, #231F20);
+  border-color: var(--border);
+}
