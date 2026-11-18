@@ -30,6 +30,8 @@ Open de Admin-app en log in met e-mail en wachtwoord (standaard e-mail: `j.g_vdb
 - **Workflow**: per persoon de huidige open/pending-last, plus afgerond en afgekeurd in de gekozen periode, en optioneel wie taken heeft afgevinkt (`pendingBy`)
 - **Terugkerende taken** aanmaken, bewerken, pauzeren en verwijderen
 - **Medewerkers** beheren (toevoegen, hernoemen, deactiveren). Bij hernoemen wordt `assigneeName` ook bijgewerkt op open/pending taken en herhaal-templates. De standaardlijst: Jane, Aart, Edwin, Daan, Reda, Akif, Finn, Tim, Guido, Renato, Alex. Toewijzen via een keuzelijst, plus **Allen** en niet-toegewezen
+- **Pincode**: meldingen als een medewerker de pincode is vergeten (badge in het menu, lijst op Dashboard en Medewerkers) met de knop **Pincode resetten** en een bevestigingsstap. Per medewerker zie je of er een pincode is ingesteld, en kun je handmatig resetten. Er is ook **Naamindex opbouwen** onder Data; ontbrekende indexregels worden bij het openen van de admin-app automatisch aangevuld.
+- Bij een nieuwe versie van de admin-app verschijnt de balk **Nieuwe versie beschikbaar, tik om te vernieuwen**.
 - **Exporteer** / **Importeer** als back-up, en optioneel **Opschonen** van afgeronde taken ouder dan 90 dagen (na export-prompt en bevestiging)
 - Bij de eerste login: optioneel **Importeer lokale gegevens naar Firebase** als dit apparaat nog oude localStorage-data heeft
 
