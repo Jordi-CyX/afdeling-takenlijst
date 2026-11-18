@@ -62,17 +62,20 @@ let swUpdateHandlerBound = false;
 
 
 const SECTION_KEY = "zeiklijst-admin-section";
-const SECTIONS = ["dashboard", "medewerkers", "taken", "controle", "workflow", "data"];
+const SECTIONS = ["dashboard", "medewerkers", "taken", "controle", "workflow", "meldingen", "data"];
 const SECTION_LABELS = {
   dashboard: "Dashboard",
   medewerkers: "Medewerkers",
   taken: "Taken",
   controle: "Controle",
   workflow: "Workflow",
+  meldingen: "Meldingen",
   data: "Data"
 };
 let currentSection = "dashboard";
 let taskFilters = { q: "", status: "all", employee: "all", location: "all", recurring: "all" };
+let reports = [];
+let reportFilter = "all";
 let dialogResolve = null;
 let toastTimer = null;
 
@@ -192,10 +195,48 @@ function startListeners() {
     renderPinResets();
     updateNavBadge();
   }, ignoreListenerError);
+  listenCollection("reports", normalizeReport, (list) => {
+    reports = list.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    renderReports();
+    updateNavBadge();
+  }, ignoreListenerError);
 }
 
 function ignoreListenerError() {
-  // New collections are denied until the pincode rules are published.
+  // New collections are denied until the latest rules are published.
+}
+
+function normalizeReport(id, data) {
+  const d = data || {};
+  const createdAt = d.createdAt && typeof d.createdAt.toDate === "function"
+    ? d.createdAt.toDate().toISOString()
+    : (d.createdAt || "");
+  const status = ["nieuw", "in_behandeling", "opgelost"].includes(d.status) ? d.status : "nieuw";
+  return {
+    id,
+    description: typeof d.description === "string" ? d.description : "",
+    photo: typeof d.photo === "string" ? d.photo : "",
+    employeeId: d.employeeId || "",
+    employeeName: d.employeeName || "",
+    createdAt,
+    appVersion: typeof d.appVersion === "string" ? d.appVersion : "",
+    device: typeof d.device === "string" ? d.device : "",
+    status,
+    adminNote: typeof d.adminNote === "string" ? d.adminNote : ""
+  };
+}
+
+function isStaffCreatedTask(task) {
+  return Boolean(task && task.createdByRole === "staff");
+}
+
+function newStaffCreatedTasks() {
+  return tasks.filter((task) => isStaffCreatedTask(task) && task.adminReview === "nieuw")
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
+function newReportCount() {
+  return reports.filter((r) => r.status === "nieuw").length;
 }
 
 function normalizeNameIndexEntry(id, data) {
@@ -407,6 +448,11 @@ function setupUi() {
       closeDialog({ ok: false });
       return;
     }
+    const lightbox = document.getElementById("image-lightbox");
+    if (lightbox && !lightbox.classList.contains("hidden")) {
+      closeLightbox();
+      return;
+    }
     if (!document.getElementById("modal").classList.contains("hidden")) {
       closeModal();
       return;
@@ -451,6 +497,18 @@ function setupUi() {
   };
   document.getElementById("app-dialog").onclick = (event) => {
     if (event.target.id === "app-dialog") closeDialog({ ok: false });
+  };
+  document.querySelectorAll("#report-filter-status [data-report-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      reportFilter = btn.dataset.reportFilter;
+      renderReports();
+    };
+  });
+  const lightbox = document.getElementById("image-lightbox");
+  const lightboxClose = document.getElementById("lightbox-close");
+  if (lightboxClose) lightboxClose.onclick = closeLightbox;
+  if (lightbox) lightbox.onclick = (event) => {
+    if (event.target.id === "image-lightbox") closeLightbox();
   };
   document.getElementById("cleanup-btn").onclick = cleanupOldCompleted;
   document.getElementById("rebuild-name-index-btn").onclick = rebuildNameIndex;
@@ -886,6 +944,20 @@ function updateNavBadge() {
     el.textContent = String(pinCount);
     el.classList.toggle("hidden", pinCount < 1);
   });
+  const staffCount = newStaffCreatedTasks().length;
+  ["nav-staff-badge", "nav-taken-badge"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = String(staffCount);
+    el.classList.toggle("hidden", staffCount < 1);
+  });
+  const reportCount = newReportCount();
+  ["nav-reports-badge", "nav-reports-toggle-badge"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = String(reportCount);
+    el.classList.toggle("hidden", reportCount < 1);
+  });
 }
 
 function renderAll() {
@@ -899,6 +971,8 @@ function renderAll() {
   renderControle();
   renderWorkflow();
   renderPinResets();
+  renderStaffCreated();
+  renderReports();
   updateNavBadge();
 }
 
@@ -938,6 +1012,7 @@ function currentWorkloadGroups() {
 }
 
 function renderDashboard() {
+  renderStaffCreated();
   document.getElementById("stat-open").textContent = tasks.filter((t) => t.status === "open").length;
   document.getElementById("stat-pending").textContent = tasks.filter((t) => t.status === "pending").length;
   document.getElementById("stat-done").textContent = tasks.filter((t) => t.status === "afgerond").length;
@@ -967,6 +1042,131 @@ function renderDashboard() {
   }
   pendingBox.innerHTML = latest.map(taskItemHtml).join("");
   bindTaskItems(pendingBox);
+}
+
+function staffCreatorLabel(task) {
+  return (task.createdByName || "").trim() || "medewerker";
+}
+
+function renderStaffCreated() {
+  const box = document.getElementById("dashboard-staff-tasks");
+  if (!box) return;
+  const items = newStaffCreatedTasks();
+  if (!items.length) {
+    box.innerHTML = "";
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  box.innerHTML = `<h3>Aangemaakte taken</h3>` + items.map((task) => {
+    const location = (task.location || "").trim();
+    const when = task.createdAt ? formatDateTime(task.createdAt) : "";
+    return `
+      <div class="staff-created-item">
+        <h4>${escapeHtml(task.title)}</h4>
+        ${location ? `<p class="staff-created-meta">${escapeHtml(location)}</p>` : ""}
+        <p class="staff-created-meta">Door ${escapeHtml(staffCreatorLabel(task))} aangemaakt${when ? " · " + escapeHtml(when) : ""}</p>
+        <div class="staff-created-actions">
+          <button type="button" class="secondary" data-review="gezien" data-task-id="${escapeAttr(task.id)}">Gezien</button>
+          <button type="button" data-review="afgehandeld" data-task-id="${escapeAttr(task.id)}">Afgehandeld</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  box.querySelectorAll("[data-review]").forEach((btn) => {
+    btn.onclick = (event) => {
+      event.stopPropagation();
+      setAdminReview(btn.dataset.taskId, btn.dataset.review);
+    };
+  });
+}
+
+async function setAdminReview(id, review) {
+  if (!id || (review !== "gezien" && review !== "afgehandeld" && review !== "nieuw")) return;
+  await safeWrite(() => updateDoc(doc(db, "tasks", id), { adminReview: review }));
+}
+
+function reportStatusLabel(status) {
+  if (status === "in_behandeling") return "In behandeling";
+  if (status === "opgelost") return "Opgelost";
+  return "Nieuw";
+}
+
+function renderReports() {
+  const list = document.getElementById("report-list");
+  if (!list) return;
+  const filtered = reports.filter((r) => reportFilter === "all" || r.status === reportFilter);
+  document.querySelectorAll("#report-filter-status [data-report-filter]").forEach((btn) => {
+    btn.setAttribute("aria-pressed", btn.dataset.reportFilter === reportFilter ? "true" : "false");
+  });
+  if (!filtered.length) {
+    list.innerHTML = '<p class="empty-state">Geen meldingen in deze filter.</p>';
+    return;
+  }
+  list.innerHTML = filtered.map((report) => {
+    const when = report.createdAt ? formatDateTime(report.createdAt) : "";
+    const photo = report.photo && String(report.photo).startsWith("data:image")
+      ? `<img class="report-photo" src="${report.photo}" alt="Foto bij melding" data-enlarge="1">`
+      : "";
+    return `
+      <article class="report-item ${escapeAttr(report.status)}">
+        <p>${escapeHtml(report.description).replace(/\\n/g, "<br>")}</p>
+        ${photo}
+        <p class="report-meta">${escapeHtml(report.employeeName || "Medewerker")}${when ? " · " + escapeHtml(when) : ""}</p>
+        <p class="report-meta">App ${escapeHtml(report.appVersion || "onbekend")}${report.device ? " · " + escapeHtml(report.device) : ""}</p>
+        <label class="report-status">Status
+          <select data-report-status="${escapeAttr(report.id)}">
+            <option value="nieuw"${report.status === "nieuw" ? " selected" : ""}>Nieuw</option>
+            <option value="in_behandeling"${report.status === "in_behandeling" ? " selected" : ""}>In behandeling</option>
+            <option value="opgelost"${report.status === "opgelost" ? " selected" : ""}>Opgelost</option>
+          </select>
+        </label>
+        <div class="report-actions">
+          <button type="button" class="danger secondary" data-delete-report="${escapeAttr(report.id)}">Verwijderen</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+  list.querySelectorAll("[data-report-status]").forEach((sel) => {
+    sel.onchange = () => updateReportStatus(sel.dataset.reportStatus, sel.value);
+  });
+  list.querySelectorAll("[data-delete-report]").forEach((btn) => {
+    btn.onclick = () => deleteReport(btn.dataset.deleteReport);
+  });
+  list.querySelectorAll("[data-enlarge]").forEach((img) => {
+    img.onclick = () => openLightbox(img.getAttribute("src"), img.getAttribute("alt") || "Foto");
+  });
+}
+
+async function updateReportStatus(id, status) {
+  if (!["nieuw", "in_behandeling", "opgelost"].includes(status)) return;
+  await safeWrite(() => updateDoc(doc(db, "reports", id), { status }));
+}
+
+async function deleteReport(id) {
+  const report = reports.find((r) => r.id === id);
+  const confirmed = await confirmAction(
+    `Melding van ${report && report.employeeName ? report.employeeName : "medewerker"} verwijderen?`,
+    { title: "Melding verwijderen", confirmText: "Verwijderen", danger: true }
+  );
+  if (!confirmed) return;
+  await safeWrite(() => deleteDoc(doc(db, "reports", id)));
+}
+
+function openLightbox(src, alt) {
+  const box = document.getElementById("image-lightbox");
+  const img = document.getElementById("lightbox-image");
+  if (!box || !img || !src) return;
+  img.src = src;
+  img.alt = alt || "";
+  box.classList.remove("hidden");
+}
+
+function closeLightbox() {
+  const box = document.getElementById("image-lightbox");
+  const img = document.getElementById("lightbox-image");
+  if (img) img.removeAttribute("src");
+  if (box) box.classList.add("hidden");
 }
 
 function workflowGroup(task) {
@@ -1161,6 +1361,7 @@ function taskItemHtml(task) {
         <div>
           <div class="task-title">${escapeHtml(task.title)}</div>
           ${locationLabel(task)}
+          ${isStaffCreatedTask(task) ? `<div class="task-created-by">Door ${escapeHtml(staffCreatorLabel(task))} aangemaakt</div>` : ""}
         </div>
         <div class="badge-row">${badges.join("")}</div>
       </div>
@@ -1512,6 +1713,10 @@ function openTask(id) {
   document.getElementById("modal-status").innerHTML = statusBadges.join("");
   const extra = [];
   if (task.createdAt) extra.push(`Aangemaakt op ${escapeHtml(formatDateTime(task.createdAt))}`);
+  if (isStaffCreatedTask(task)) {
+    extra.push(`Door ${escapeHtml(staffCreatorLabel(task))} aangemaakt`);
+    if (task.adminReview) extra.push(`Admin-review: ${escapeHtml(task.adminReview)}`);
+  }
   if (task.pendingAt) {
     extra.push(`Afgevinkt op ${escapeHtml(formatDateTime(task.pendingAt))}${task.pendingBy ? " door " + escapeHtml(task.pendingBy) : ""}`);
   }
@@ -1528,6 +1733,10 @@ function openTask(id) {
 
   const actions = document.getElementById("modal-actions");
   actions.innerHTML = "";
+  if (isStaffCreatedTask(task) && task.adminReview === "nieuw") {
+    actions.innerHTML += `<button type="button" class="secondary" data-action="gezien">Gezien</button>`;
+    actions.innerHTML += `<button type="button" data-action="afgehandeld">Afgehandeld</button>`;
+  }
   if (task.status === "open" || task.status === "pending") {
     actions.innerHTML += `<button type="button" class="secondary" data-action="edit">Bewerken</button>`;
   }
@@ -1548,6 +1757,10 @@ function openTask(id) {
   const rejectBtn = actions.querySelector('[data-action="reject"]');
   const reopenBtn = actions.querySelector('[data-action="reopen"]');
   const deleteBtn = actions.querySelector('[data-action="delete"]');
+  const gezienBtn = actions.querySelector('[data-action="gezien"]');
+  const afgehandeldBtn = actions.querySelector('[data-action="afgehandeld"]');
+  if (gezienBtn) gezienBtn.onclick = () => setAdminReview(task.id, "gezien");
+  if (afgehandeldBtn) afgehandeldBtn.onclick = () => setAdminReview(task.id, "afgehandeld");
   if (editBtn) editBtn.onclick = () => startEditTask(task.id);
   if (pendingBtn) pendingBtn.onclick = () => markPending(task.id);
   if (approveBtn) approveBtn.onclick = () => approveTask(task.id);
@@ -1769,6 +1982,12 @@ async function writeAll(tpls, taskList) {
       payload.lastRejectionReason = task.lastRejectionReason || "";
     }
     if (task.pendingByEmployeeId) payload.pendingByEmployeeId = task.pendingByEmployeeId;
+    if (task.createdByRole || task.createdByEmployeeId || task.createdByName || task.adminReview) {
+      payload.createdByRole = task.createdByRole || "";
+      payload.createdByEmployeeId = task.createdByEmployeeId || "";
+      payload.createdByName = task.createdByName || "";
+      payload.adminReview = task.adminReview || "";
+    }
     await add(doc(db, "tasks", id), payload);
   }
   await flush();

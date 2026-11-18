@@ -12,10 +12,10 @@
   <title>Zeiklijst Admin</title>
   <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" type="image/png" href="icons/icon-192.png?v=15">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=15">
-  <link rel="stylesheet" href="../styles.css?v=15">
-  <link rel="stylesheet" href="admin.css?v=15">
+  <link rel="icon" type="image/png" href="icons/icon-192.png?v=16">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=16">
+  <link rel="stylesheet" href="../styles.css?v=16">
+  <link rel="stylesheet" href="admin.css?v=16">
 </head>
 <body>
   <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
@@ -33,6 +33,8 @@
             <span class="nav-caret" aria-hidden="true">▾</span>
             <span id="nav-badge" class="nav-badge hidden" aria-label="Pending taken">0</span>
             <span id="nav-pin-badge" class="nav-badge nav-badge-pin hidden" aria-label="Pincode-verzoeken">0</span>
+            <span id="nav-staff-badge" class="nav-badge nav-badge-staff hidden" aria-label="Aangemaakte taken">0</span>
+            <span id="nav-reports-toggle-badge" class="nav-badge nav-badge-report hidden" aria-label="Nieuwe meldingen">0</span>
           </button>
           <ul id="nav-menu" class="nav-menu hidden" role="menu">
             <li role="none"><button type="button" role="menuitem" data-section="dashboard">Dashboard</button></li>
@@ -42,7 +44,12 @@
                 <span id="nav-medewerkers-badge" class="nav-badge nav-badge-pin hidden">0</span>
               </button>
             </li>
-            <li role="none"><button type="button" role="menuitem" data-section="taken">Taken</button></li>
+            <li role="none">
+              <button type="button" role="menuitem" data-section="taken">
+                Taken
+                <span id="nav-taken-badge" class="nav-badge nav-badge-staff hidden">0</span>
+              </button>
+            </li>
             <li role="none">
               <button type="button" role="menuitem" data-section="controle">
                 Controle
@@ -50,6 +57,12 @@
               </button>
             </li>
             <li role="none"><button type="button" role="menuitem" data-section="workflow">Workflow</button></li>
+            <li role="none">
+              <button type="button" role="menuitem" data-section="meldingen">
+                Meldingen
+                <span id="nav-reports-badge" class="nav-badge nav-badge-report hidden">0</span>
+              </button>
+            </li>
             <li role="none"><button type="button" role="menuitem" data-section="data">Data</button></li>
             <li role="none"><button type="button" role="menuitem" id="logout-btn">Uitloggen</button></li>
           </ul>
@@ -91,6 +104,7 @@
         </button>
       </div>
       <p class="stat-done-mini">Afgerond: <strong id="stat-done">0</strong></p>
+      <div id="dashboard-staff-tasks" class="staff-created-list hidden"></div>
       <h3>Huidige verdeling</h3>
       <div id="dashboard-workload" class="workload-list"></div>
       <h3>Laatste pending</h3>
@@ -236,6 +250,20 @@
       <div id="workflow-list"></div>
     </section>
 
+    <section id="section-meldingen" class="admin-section hidden" data-section="meldingen">
+      <h2>Meldingen</h2>
+      <div class="filter-group">
+        <span class="filter-label">Status</span>
+        <div class="filter-chips" id="report-filter-status">
+          <button type="button" data-report-filter="all" aria-pressed="true">Alles</button>
+          <button type="button" data-report-filter="nieuw">Nieuw</button>
+          <button type="button" data-report-filter="in_behandeling">In behandeling</button>
+          <button type="button" data-report-filter="opgelost">Opgelost</button>
+        </div>
+      </div>
+      <div id="report-list"></div>
+    </section>
+
     <section id="section-data" class="admin-section hidden" data-section="data">
       <h2>Data</h2>
       <div id="migration-banner" class="migration-banner hidden">
@@ -301,6 +329,11 @@
   </div>
   <div id="app-toast" class="app-toast hidden" role="status"></div>
 
-  <script type="module" src="admin.js?v=15"></script>
+  <div id="image-lightbox" class="lightbox hidden" role="dialog" aria-modal="true" aria-label="Vergrote foto">
+    <button type="button" class="close" id="lightbox-close" aria-label="Sluiten">&times;</button>
+    <img id="lightbox-image" alt="">
+  </div>
+
+  <script type="module" src="admin.js?v=16"></script>
 </body>
 </html>
