@@ -117,17 +117,6 @@ function clearStoredStaff() {
   localStorage.removeItem(STORAGE_LOGIN_KEY);
 }
 
-function screenshotLoginStep() {
-  const value = new URLSearchParams(location.search).get("showLogin");
-  if (value === "setup" || value === "pin" || value === "name" || value === "code") return value;
-  return "";
-}
-
-function screenshotPreviewStaff() {
-  const params = new URLSearchParams(location.search);
-  return params.get("showAddTask") === "1" || params.get("showReport") === "1";
-}
-
 function isOffline(err) {
   const code = String((err && err.code) || "");
   const message = String((err && err.message) || err || "");
@@ -771,30 +760,6 @@ export function initStaffAuth(options) {
   };
   bindUi();
   renderHeaderUser();
-
-  if (screenshotPreviewStaff()) {
-    currentStaff = { employeeId: "demo", nameKey: "demo", name: "Demo", pinVersion: 0, loginKey: "" };
-    renderHeaderUser();
-    hideLogin();
-    return;
-  }
-
-  const forced = screenshotLoginStep();
-  if (forced) {
-    if (forced !== "name") {
-      pending = {
-        employeeId: "demo",
-        nameKey: "demo",
-        name: "Demo",
-        pinVersion: 0,
-        hasPin: forced === "pin",
-        loginKey: forced === "pin" ? "demo" : "",
-        startCode: ""
-      };
-    }
-    showStep(forced);
-    return;
-  }
 
   ensurePersistence();
   onAuthStateChanged(auth, async (user) => {

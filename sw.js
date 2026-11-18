@@ -1,6 +1,6 @@
 // Versioned URL so an HTTP-cached app-version.js can never give a new worker the old cache name.
-importScripts("./app-version.js?v=18");
-const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v18";
+importScripts("./app-version.js?v=19");
+const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v19";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
@@ -25,9 +25,10 @@ const ASSETS = [
   "./fonts/zeiklijst-display.css",
   "./logo.png",
   "./logo.svg",
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-app.js`,
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-auth.js`,
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-firestore.js`
+  // L7: the Firebase SDK is vendored (see the import map in index.html).
+  `./vendor/firebase/${FIREBASE_SDK}/firebase-app.js`,
+  `./vendor/firebase/${FIREBASE_SDK}/firebase-auth.js`,
+  `./vendor/firebase/${FIREBASE_SDK}/firebase-firestore.js`
 ];
 const FONT_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
 

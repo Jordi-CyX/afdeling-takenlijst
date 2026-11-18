@@ -16,7 +16,7 @@ import {
   compressImage,
   isSafeImageDataUrl
 } from "./shared.js";
-import { serverTimestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+import { serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   getCurrentStaff,
   initStaffAuth,
@@ -26,7 +26,8 @@ import {
 
 let tasks = [];
 let templates = [];
-let employees = [];
+// L3: only the signed-in employee's own employees/{id} doc is read, never the list.
+let ownEmployee = null;
 let currentTaskId = null;
 let knownDate = localDateKey(new Date());
 let listenersStarted = false;
@@ -41,8 +42,18 @@ const TITLE_MAX = 120;
 const LOCATION_MAX = 120;
 const DESCRIPTION_MAX = 2000;
 const REPORT_DESC_MAX = 1000;
-const PHOTO_MAX_CHARS = 700000;
 const DEVICE_MAX_CHARS = 300;
+const APP_VERSION_MAX = 40;
+// M3: client-side limits. ZLA's rules enforce the same values (zl-audit-rules-needs.md).
+const PHOTO_MAX_CHARS = 250000;          // data-URL length, ~180 KB of JPEG
+const PHOTO_FILE_MAX_BYTES = 25 * 1024 * 1024; // refuse huge files before decoding
+const PHOTO_ACCEPT = /^image\/(jpeg|png|webp|heic|heif|gif|bmp)$/i;
+const OWN_TASKS_PER_DAY = 10;
+const REPORTS_PER_DAY = 5;
+const SUBMIT_COOLDOWN_MS = 15000;
+const TOGGLE_COOLDOWN_MS = 1500;
+const REPORT_COUNT_KEY = "zeiklijst-report-count";
+const LAST_SUBMIT_KEY = "zeiklijst-last-submit";
 
 // Field names for staff-created tasks and reports. Must match ZLA's rules exactly.
 const STAFF_TASK = {
@@ -72,7 +83,7 @@ const REPORT = {
 };
 
 function appVersion() {
-  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v18";
+  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v19";
 }
 
 function isStaffCreated(task) {
@@ -82,8 +93,8 @@ function isStaffCreated(task) {
 function officialStaffName() {
   const staff = getCurrentStaff();
   if (!staff) return "";
-  const mine = employees.find((e) => e.id === staff.employeeId);
-  return (mine && mine.name) || staff.name || "";
+  if (ownEmployee && ownEmployee.id === staff.employeeId && ownEmployee.name) return ownEmployee.name;
+  return staff.name || "";
 }
 
 function isRecurring(task) {
@@ -222,22 +233,26 @@ function startListeners() {
     await maybeGenerate();
     renderTasks();
   }, onListenerError));
-  unsubscribers.push(listenCollection("employees", normalizeEmployee, (list) => {
-    employees = list.filter((e) => e.active).sort((a, b) => a.name.localeCompare(b.name, "nl"));
-    const staff = getCurrentStaff();
-    if (staff) {
-      const mine = employees.find((e) => e.id === staff.employeeId) || list.find((e) => e.id === staff.employeeId);
-      if (mine && mine.name) setStaffDisplayName(mine.name);
-      if (mine && mine.active === false) {
+  const staff = getCurrentStaff();
+  if (staff && staff.employeeId) {
+    unsubscribers.push(onSnapshot(doc(db, "employees", staff.employeeId), (snap) => {
+      if (!snap.exists()) {
+        onListenerError({ code: "permission-denied" });
+        return;
+      }
+      const mine = normalizeEmployee(snap.id, snap.data());
+      ownEmployee = mine;
+      if (mine.active === false) {
         onListenerError(
           { code: "permission-denied" },
           "Je account is niet actief. Neem contact op met je leidinggevende."
         );
         return;
       }
-    }
-    if (currentTaskId) openTask(currentTaskId);
-  }, onListenerError));
+      if (mine.name) setStaffDisplayName(mine.name);
+      if (currentTaskId) openTask(currentTaskId);
+    }, onListenerError));
+  }
 }
 
 function stopListeners() {
@@ -252,7 +267,7 @@ function stopListeners() {
   listenersStarted = false;
   tasks = [];
   templates = [];
-  employees = [];
+  ownEmployee = null;
 }
 
 function currentView() {
@@ -565,23 +580,26 @@ function openTask(id) {
   });
   document.getElementById("modal-photos").replaceChildren(...photoEls);
 
+  const allowed = canToggle(task);
   const tickRow = document.getElementById("tick-by-row");
-  tickRow.classList.toggle("hidden", task.status !== "open");
-  if (task.status === "open") fillTickName();
+  tickRow.classList.toggle("hidden", task.status !== "open" || !allowed);
+  if (task.status === "open" && allowed) fillTickName();
 
   const actions = document.getElementById("modal-actions");
   actions.replaceChildren();
-  if (task.status === "open") {
+  if (!allowed) {
+    // Someone else's task: read-only.
+  } else if (task.status === "open") {
     const btn = el("button", "success", "Markeer als gedaan");
     btn.type = "button";
     btn.id = "tick-btn";
-    btn.onclick = () => markPending(task.id);
+    btn.onclick = () => guardedToggle(() => markPending(task.id));
     actions.append(btn);
   } else if (task.status === "pending") {
     const btn = el("button", "secondary", "Ongedaan maken");
     btn.type = "button";
     btn.id = "untick-btn";
-    btn.onclick = () => unmarkPending(task.id);
+    btn.onclick = () => guardedToggle(() => unmarkPending(task.id));
     actions.append(btn);
   }
   document.getElementById("modal").classList.remove("hidden");
@@ -617,9 +635,40 @@ function showToast(text, type) {
   }, 4000);
 }
 
+// L2: staff may only tick/untick their own, "Allen" or unassigned tasks
+// (same condition ZLA's isStatusToggle enforces).
+function canToggle(task) {
+  const staff = getCurrentStaff();
+  if (!staff || !task) return false;
+  const assigneeId = task.assigneeId == null ? "" : String(task.assigneeId);
+  return assigneeId === staff.employeeId || assigneeId === "ALLEN" || assigneeId === "";
+}
+
+let toggleBusy = false;
+let lastToggleAt = 0;
+
+// Double-submit / rate guard for tick and untick (M3).
+async function guardedToggle(fn) {
+  const now = Date.now();
+  if (toggleBusy || now - lastToggleAt < TOGGLE_COOLDOWN_MS) return;
+  toggleBusy = true;
+  lastToggleAt = now;
+  document.querySelectorAll("#tick-btn, #untick-btn").forEach((b) => { b.disabled = true; });
+  try {
+    await fn();
+  } finally {
+    toggleBusy = false;
+    document.querySelectorAll("#tick-btn, #untick-btn").forEach((b) => { b.disabled = false; });
+  }
+}
+
 async function markPending(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "open") return;
+  if (!canToggle(task)) {
+    showToast("Je kunt alleen je eigen taken of taken voor Allen afvinken.", "error");
+    return;
+  }
   const staff = getCurrentStaff();
   const pendingBy = staff && staff.name ? staff.name : "";
   if (!pendingBy) {
@@ -642,6 +691,10 @@ async function markPending(id) {
 async function unmarkPending(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "pending") return;
+  if (!canToggle(task)) {
+    showToast("Je kunt alleen je eigen taken of taken voor Allen terugzetten.", "error");
+    return;
+  }
   try {
     await updateDoc(doc(db, "tasks", id), {
       status: "open",
@@ -655,13 +708,6 @@ async function unmarkPending(id) {
   }
 }
 
-
-function screenshotForm() {
-  const params = new URLSearchParams(location.search);
-  if (params.get("showAddTask") === "1") return "add";
-  if (params.get("showReport") === "1") return "report";
-  return "";
-}
 
 function isPermissionDenied(err) {
   const code = String((err && err.code) || "");
@@ -686,21 +732,88 @@ function deviceInfo() {
   return `${ua} | ${platform} | ${screenSize}`.slice(0, DEVICE_MAX_CHARS);
 }
 
+// M3: photo type/size checks before and after compression.
+function checkPhotoFile(file) {
+  if (!file) return;
+  // Output is always re-encoded to JPEG via canvas; the type check is for clear feedback.
+  if (file.type && !PHOTO_ACCEPT.test(file.type)) {
+    throw new Error("Kies een geldige foto (JPG, PNG of WebP).");
+  }
+  if (file.size > PHOTO_FILE_MAX_BYTES) {
+    throw new Error("De foto is te groot. Kies een kleinere foto.");
+  }
+}
+
+function checkPhotoDataUrl(dataUrl) {
+  if (!isSafeImageDataUrl(dataUrl) || !/^data:image\/(jpeg|png|webp);base64,/.test(dataUrl)) {
+    throw new Error("Kies een geldige foto.");
+  }
+  if (dataUrl.length > PHOTO_MAX_CHARS) {
+    throw new Error("De foto is te groot. Kies een kleinere foto.");
+  }
+  return dataUrl;
+}
+
+// M3: rate / double-submit guards (client side; the rules are the real limit).
+let submitBusy = false;
+
+function dayKey() {
+  return localDateKey(new Date());
+}
+
+function lastSubmitAt() {
+  return Number(localStorage.getItem(LAST_SUBMIT_KEY)) || 0;
+}
+
+function cooldownMessage() {
+  const wait = SUBMIT_COOLDOWN_MS - (Date.now() - lastSubmitAt());
+  if (wait <= 0) return "";
+  return `Even wachten, je kunt over ${Math.ceil(wait / 1000)} seconden weer iets versturen.`;
+}
+
+function markSubmitted() {
+  localStorage.setItem(LAST_SUBMIT_KEY, String(Date.now()));
+}
+
+function ownTasksToday(employeeId) {
+  const today = dayKey();
+  return tasks.filter((t) => t.createdByRole === "staff"
+    && t.createdByEmployeeId === employeeId
+    && t.createdAt
+    && localDateKey(new Date(t.createdAt)) === today).length;
+}
+
+function reportCount(employeeId) {
+  try {
+    const data = JSON.parse(localStorage.getItem(REPORT_COUNT_KEY) || "{}");
+    return data && data.day === dayKey() && data.employeeId === employeeId ? Number(data.count) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function bumpReportCount(employeeId) {
+  const count = reportCount(employeeId) + 1;
+  localStorage.setItem(REPORT_COUNT_KEY, JSON.stringify({ day: dayKey(), employeeId, count }));
+}
+
 async function compressPhoto(file, maxChars = PHOTO_MAX_CHARS) {
+  checkPhotoFile(file);
   let edge = 1000;
   let quality = 0.6;
   let dataUrl = "";
   for (let i = 0; i < 7; i++) {
     dataUrl = await compressImage(file, edge, quality);
     if (dataUrl && !isSafeImageDataUrl(dataUrl)) throw new Error("Kies een geldige foto.");
-    if (!dataUrl || dataUrl.length <= maxChars) return dataUrl;
+    if (!dataUrl) return "";
+    if (dataUrl.length <= maxChars) return checkPhotoDataUrl(dataUrl);
     edge = Math.max(280, Math.round(edge * 0.7));
     quality = Math.max(0.32, quality - 0.08);
   }
   if (!dataUrl || dataUrl.length > maxChars) {
     throw new Error("De foto is te groot. Kies een kleinere foto.");
   }
-  return dataUrl;
+  return checkPhotoDataUrl(dataUrl);
 }
 
 function bindPhotoPreview(input, preview) {
@@ -802,15 +915,9 @@ function openReportPage() {
   }
 }
 
-function openScreenshotForm() {
-  const which = screenshotForm();
-  if (which === "add") openAddTaskPage();
-  if (which === "report") openReportPage();
-}
-
 function writeFormError(err, permissionText, fallback) {
   if (isPermissionDenied(err)) return permissionText;
-  if (/te groot|geldige foto/i.test(String((err && err.message) || err || ""))) {
+  if (/te groot|geldige foto|Even wachten|maximaal/i.test(String((err && err.message) || err || ""))) {
     return err.message;
   }
   const code = String((err && err.code) || "");
@@ -855,17 +962,25 @@ async function onAddTaskSubmit(event) {
     setFormError("add-task-error", `De beschrijving mag maximaal ${DESCRIPTION_MAX} tekens zijn.`);
     return;
   }
+  if (submitBusy) return;
+  const wait = cooldownMessage();
+  if (wait) {
+    setFormError("add-task-error", wait);
+    return;
+  }
+  if (ownTasksToday(staff.employeeId) >= OWN_TASKS_PER_DAY) {
+    setFormError("add-task-error", `Je kunt maximaal ${OWN_TASKS_PER_DAY} eigen taken per dag toevoegen.`);
+    return;
+  }
   const form = document.getElementById("staff-add-task-form");
   const fileInput = document.getElementById("add-task-photo");
   const file = fileInput && fileInput.files && fileInput.files[0];
+  submitBusy = true;
   setFormBusy(form, true);
   setFormError("add-task-error", "");
   try {
     const photos = [];
     if (file) {
-      if (file.type && !file.type.startsWith("image/")) {
-        throw new Error("Kies een geldige foto.");
-      }
       const dataUrl = await compressPhoto(file);
       if (dataUrl) photos.push(dataUrl);
     }
@@ -888,6 +1003,7 @@ async function onAddTaskSubmit(event) {
     };
     delete payload.dueDate;
     await addDoc(collection(db, "tasks"), payload);
+    markSubmitted();
     closePage("add-task-page");
     showToast("Taak toegevoegd.", "success");
   } catch (err) {
@@ -899,6 +1015,7 @@ async function onAddTaskSubmit(event) {
     setFormError("add-task-error", message);
     showToast(message, "error");
   } finally {
+    submitBusy = false;
     setFormBusy(form, false);
   }
 }
@@ -919,9 +1036,20 @@ async function onReportSubmit(event) {
     setFormError("report-error", `De omschrijving mag maximaal ${REPORT_DESC_MAX} tekens zijn.`);
     return;
   }
+  if (submitBusy) return;
+  const wait = cooldownMessage();
+  if (wait) {
+    setFormError("report-error", wait);
+    return;
+  }
+  if (reportCount(staff.employeeId) >= REPORTS_PER_DAY) {
+    setFormError("report-error", `Je kunt maximaal ${REPORTS_PER_DAY} meldingen per dag versturen.`);
+    return;
+  }
   const form = document.getElementById("report-form");
   const fileInput = document.getElementById("report-photo");
   const file = fileInput && fileInput.files && fileInput.files[0];
+  submitBusy = true;
   setFormBusy(form, true);
   setFormError("report-error", "");
   try {
@@ -931,18 +1059,17 @@ async function onReportSubmit(event) {
       [F.employeeId]: staff.employeeId,
       [F.employeeName]: officialStaffName(),
       [F.createdAt]: serverTimestamp(),
-      [F.appVersion]: appVersion(),
+      [F.appVersion]: appVersion().slice(0, APP_VERSION_MAX),
       [F.device]: deviceInfo(),
       [F.status]: "nieuw"
     };
     if (file) {
-      if (file.type && !file.type.startsWith("image/")) {
-        throw new Error("Kies een geldige foto.");
-      }
       const dataUrl = await compressPhoto(file);
       if (dataUrl) payload[F.photo] = dataUrl;
     }
     await addDoc(collection(db, "reports"), payload);
+    markSubmitted();
+    bumpReportCount(staff.employeeId);
     closePage("report-page");
     showToast("Bedankt, je melding is verstuurd", "success");
   } catch (err) {
@@ -954,6 +1081,7 @@ async function onReportSubmit(event) {
     setFormError("report-error", message);
     showToast(message, "error");
   } finally {
+    submitBusy = false;
     setFormBusy(form, false);
   }
 }
@@ -1016,8 +1144,6 @@ function setupUpdateBanner() {
   const banner = document.getElementById("update-banner");
   if (!banner) return;
   let reloading = false;
-  const params = new URLSearchParams(location.search);
-  const forced = params.get("showUpdate") === "1";
 
   const show = () => banner.classList.remove("hidden");
   let waitingWorker = null;
@@ -1033,10 +1159,7 @@ function setupUpdateBanner() {
       waitingWorker.postMessage({ type: "SKIP_WAITING" });
       return;
     }
-    if (forced) location.reload();
   });
-
-  if (forced) show();
 
   if (!("serviceWorker" in navigator)) return;
 
@@ -1078,4 +1201,3 @@ initStaffAuth({
     renderTasks();
   }
 });
-openScreenshotForm();
