@@ -1,4 +1,4 @@
-const CACHE_NAME = "takenlijst-v2";
+const CACHE_NAME = "zeiklijst-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,8 +7,10 @@ const ASSETS = [
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
-  "./icons/apple-touch-icon.png"
+  "./icons/apple-touch-icon.png",
+  "./fonts/black-ops-one.woff2"
 ];
+const FONT_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -28,6 +30,23 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
   const url = new URL(request.url);
+
+  if (FONT_HOSTS.has(url.hostname)) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(request);
+      try {
+        const response = await fetch(request);
+        if (response && response.ok) cache.put(request, response.clone());
+        return response;
+      } catch (err) {
+        if (cached) return cached;
+        throw err;
+      }
+    })());
+    return;
+  }
+
   if (url.origin !== self.location.origin) return;
 
   event.respondWith((async () => {

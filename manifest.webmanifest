@@ -1,7 +1,7 @@
 {
-  "name": "Takenlijst Afdeling",
-  "short_name": "Takenlijst",
-  "description": "Takenlijst voor de afdeling",
+  "name": "Zeiklijst Live",
+  "short_name": "Zeiklijst",
+  "description": "Zeiklijst Live — takenlijst voor intern afdelingsgebruik",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -1,6 +1,6 @@
-# Takenlijst Afdeling
+# Zeiklijst Live
 
-Mobiele takenlijst voor de afdeling. Werkt in de browser en is te installeren als app op je telefoon. Admin ziet extra functies; voor gewone gebruikers is de weergave op telefoon en in de browser hetzelfde.
+Zeiklijst Live is een mobiele takenlijst voor intern gebruik op de afdeling. Werkt in de browser en is te installeren als app op je telefoon. Admin ziet extra functies; voor gewone gebruikers is de weergave op telefoon en in de browser hetzelfde.
 
 Live versie: https://jordi-cyx.github.io/afdeling-takenlijst/
 
@@ -68,6 +68,7 @@ Foto's worden als base64 in de browser opgeslagen. Grote foto's kunnen de localS
 
 ## Technisch
 
-- Statische HTML, CSS en JavaScript, live via GitHub Pages
+- Statische HTML, CSS en JavaScript, live via GitHub Pages (repository blijft `afdeling-takenlijst`)
+- De titel in de header gebruikt het lettertype **Black Ops One**
 - Kleuren: oranje accent (`#FF7A00`) en donkergrijs (`#2B2B2B` / `#3A3A3A`)
 - Het admin-wachtwoord staat niet in deze README of als platte tekst in de code, alleen als PBKDF2-hash (`ADMIN_SALT` en `ADMIN_HASH` in `app.js`)

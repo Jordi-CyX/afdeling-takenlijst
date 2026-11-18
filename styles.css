@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "Black Ops One";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/black-ops-one.woff2") format("woff2");
+}
+
 :root {
   --bg: #2B2B2B;
   --bg-elevated: #3A3A3A;
@@ -70,8 +78,12 @@ header {
 
 header h1 {
   margin: 0;
-  font-size: 1.25rem;
-  letter-spacing: 0.01em;
+  font-family: "Black Ops One", Impact, "Arial Black", sans-serif;
+  font-weight: 400;
+  font-size: 1.55rem;
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+  color: var(--accent);
 }
 
 .admin-label {
@@ -598,6 +610,6 @@ button:focus-visible {
   }
 
   header h1 {
-    font-size: 1.15rem;
+    font-size: 1.28rem;
   }
 }
