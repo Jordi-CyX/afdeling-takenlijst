@@ -19,16 +19,18 @@ Er is geen admin-login in de medewerkers-app.
 
 ## Voor admin
 
-Open de Admin-app en log in met e-mail en wachtwoord (standaard e-mail: `j.g_vdbos@outlook.com`).
+Open de Admin-app en log in met e-mail en wachtwoord (standaard e-mail: `j.g_vdbos@outlook.com`). De app gebruikt de HORNBACH-kleuren (`#3A3C3E`, accent `#F99D27`) en het lettertype **Rubik Distressed** (OFL) voor de kop in de menubanner.
 
-- **Dashboard** met aantallen openstaand, pending en afgerond, plus een verdeling per medewerker
-- Taken **toevoegen** en **toewijzen** (titel en beschrijving verplicht; medewerker en foto's optioneel)
+- **Dashboard**: aanklikbare totalen voor open (naar Taken, gefilterd) en pending (naar Controle), de *actuele* open/pending-verdeling per medewerker (inclusief Allen en Niet toegewezen), en een korte lijst van de laatste pending taken. Afgerond blijft als kleiner cijfer staan.
+- Taken **toevoegen** en **bewerken** (titel verplicht; locatie, beschrijving en foto's optioneel, max. 4 gecomprimeerde foto's). Het formulier "Nieuwe taak" staat standaard ingeklapt. Zoeken en filteren kan op status, medewerker, locatie en herhalend.
 - Een bestaande taak **opnieuw toewijzen**
 - Taken **verwijderen**
-- Pending taken **goedkeuren** (status **Afgerond**, met keuringsdatum) of **afwijzen** (terug naar Open)
+- Een afgeronde taak **terugzetten naar open**
+- Pending taken **goedkeuren** of **afwijzen**, altijd met een bevestigingsdialoog. Bij afwijzen kan een korte reden (sterk aangeraden). Die geschiedenis is zichtbaar in de taakmodal.
+- **Workflow**: per persoon de huidige open/pending-last, plus afgerond en afgekeurd in de gekozen periode, en optioneel wie taken heeft afgevinkt (`pendingBy`)
 - **Terugkerende taken** aanmaken, bewerken, pauzeren en verwijderen
-- **Medewerkers** beheren (toevoegen, hernoemen, deactiveren). De standaardlijst: Jane, Aart, Edwin, Daan, Reda, Akif, Finn, Tim, Guido, Renato, Alex. Toewijzen via een keuzelijst, plus **Allen** en niet-toegewezen
-- **Exporteer** / **Importeer** als back-up
+- **Medewerkers** beheren (toevoegen, hernoemen, deactiveren). Bij hernoemen wordt `assigneeName` ook bijgewerkt op open/pending taken en herhaal-templates. De standaardlijst: Jane, Aart, Edwin, Daan, Reda, Akif, Finn, Tim, Guido, Renato, Alex. Toewijzen via een keuzelijst, plus **Allen** en niet-toegewezen
+- **Exporteer** / **Importeer** als back-up, en optioneel **Opschonen** van afgeronde taken ouder dan 90 dagen (na export-prompt en bevestiging)
 - Bij de eerste login: optioneel **Importeer lokale gegevens naar Firebase** als dit apparaat nog oude localStorage-data heeft
 
 ## Terugkerende taken
