@@ -256,10 +256,10 @@ h2, h3 {
 }
 .guest-app h2,
 .guest-app h3 {
-  font-family: var(--font-display);
-  font-weight: 400;
-  font-size: 1.15rem;
-  letter-spacing: 0.02em;
+  font-family: Arial, Helvetica, sans-serif;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0;
 }
 
 h3 { margin-top: 1.5rem; }
@@ -709,4 +709,232 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   }
   .badge-row { justify-content: flex-start; }
   header h1 { font-size: 1.22rem; text-shadow: 3px 3px 0 #000; -webkit-text-stroke: 1.5px #000; }
+}
+
+
+/* —— Guest-app only (do not affect admin) —— */
+.guest-app .task-item {
+  align-items: stretch;
+}
+.guest-app .task-item.pending {
+  opacity: 1;
+  filter: none;
+  background: #f6eef3;
+}
+.guest-app .task-item.pending:hover { background: #f0e4eb; }
+.guest-app .task-item.pending .task-title,
+.guest-app .task-item.pending .task-location,
+.guest-app .task-item.pending .task-age {
+  color: var(--anthracite);
+  opacity: 1;
+}
+.guest-app .task-assignee.is-muted {
+  background: #4A4546;
+  color: #D4D0CE;
+  font-weight: 600;
+}
+.guest-app .task-age {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+  font-weight: 600;
+}
+.guest-app .task-age.hidden { display: none; }
+.guest-app .badge.rejected {
+  background: rgba(196, 0, 112, 0.12);
+  color: var(--magenta);
+  border: 1px solid var(--magenta);
+}
+
+.guest-app .filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+}
+.guest-app .chip {
+  min-height: 36px;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--anthracite);
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-family: Arial, Helvetica, sans-serif;
+}
+.guest-app .chip:hover { background: #f3f1ee; }
+.guest-app .chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--anthracite);
+}
+.guest-app .chip.is-active:hover { background: var(--accent-hover); }
+.guest-app .filter-hint {
+  margin: -0.4rem 0 0.9rem;
+  font-size: 0.85rem;
+  color: var(--text-on-dark);
+  background: rgba(35, 31, 32, 0.35);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+}
+.guest-app .filter-hint.hidden,
+.guest-app .hidden { display: none; }
+.guest-app .task-section { margin-bottom: 1.25rem; }
+.guest-app .task-section[hidden] { display: none; }
+.guest-app #board-empty.hidden { display: none; }
+
+.guest-app .task-list.view-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.75rem;
+}
+.guest-app .task-list.view-tiles .empty-state { grid-column: 1 / -1; }
+.guest-app .task-list.view-tiles .task-item {
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 8.25rem;
+  justify-content: space-between;
+}
+.guest-app .task-list.view-tiles .task-item-main { flex: 1 1 auto; }
+.guest-app .task-list.view-tiles .badge-row { justify-content: flex-start; }
+
+.guest-app .header-more {
+  position: relative;
+  flex-shrink: 0;
+}
+.guest-app .header-more-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid #5A5A5A;
+  border-radius: 8px;
+  background: transparent;
+  color: #9A9694;
+}
+.guest-app .header-more-btn svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.guest-app .header-more-btn:hover,
+.guest-app .header-more-btn[aria-expanded="true"] {
+  background: #3A3A3A;
+  color: var(--text-on-dark);
+}
+.guest-app .header-more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 12.5rem;
+  background: #2A2728;
+  border: 1px solid #5A5A5A;
+  border-radius: 10px;
+  padding: 0.35rem;
+  box-shadow: var(--shadow);
+  z-index: 80;
+}
+.guest-app .header-more-menu.hidden { display: none; }
+.guest-app .admin-menu-link {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  color: var(--text-on-dark);
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-family: Arial, Helvetica, sans-serif;
+}
+.guest-app .admin-menu-link img {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: block;
+}
+.guest-app .admin-menu-link:hover,
+.guest-app .admin-menu-link:focus-visible {
+  background: #3A3A3A;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.guest-app .rejection-note {
+  margin: 0 0 0.85rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  background: var(--magenta-soft);
+  border: 1px solid rgba(196, 0, 112, 0.35);
+  color: var(--anthracite);
+  font-size: 0.9rem;
+}
+.guest-app .rejection-note p { margin: 0.25rem 0 0; }
+.guest-app .rejection-note.hidden { display: none; }
+
+.guest-app #modal-photos img {
+  cursor: zoom-in;
+}
+.guest-app .lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(35, 31, 32, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 1rem 1rem;
+}
+.guest-app .lightbox.hidden { display: none; }
+.guest-app .lightbox img {
+  max-width: 100%;
+  max-height: 90vh;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #111;
+}
+.guest-app .lightbox-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  background: none;
+  color: var(--text-on-dark);
+  border: none;
+  font-size: 2rem;
+  min-height: 44px;
+  min-width: 44px;
+  line-height: 1;
+}
+.guest-app .lightbox-close:hover { background: #3A3A3A; color: var(--text-on-dark); }
+
+.guest-app .toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1rem + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 1200;
+  max-width: min(28rem, calc(100% - 2rem));
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  font-family: Arial, Helvetica, sans-serif;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.guest-app .toast.hidden { display: none; }
+.guest-app .toast.is-success {
+  background: var(--anthracite);
+  color: var(--text-on-dark);
+  border: 1px solid var(--accent);
+}
+.guest-app .toast.is-error {
+  background: #3A1518;
+  color: #F8E8EA;
+  border: 1px solid var(--danger);
 }

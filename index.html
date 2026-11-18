@@ -14,7 +14,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=11">
+  <link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body class="guest-app">
   <header>
@@ -29,18 +29,39 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg>
           </button>
         </div>
-        <a href="admin/" class="app-switch" aria-label="Naar Zeiklijst Admin">
-          <img src="admin/icons/icon-192.png" alt="" width="32" height="32">
-        </a>
+        <div class="header-more">
+          <button type="button" id="header-more-btn" class="header-more-btn" aria-expanded="false" aria-haspopup="true" aria-controls="header-more-menu" aria-label="Meer opties" title="Meer">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+          </button>
+          <div id="header-more-menu" class="header-more-menu hidden" role="menu">
+            <a href="admin/" class="admin-menu-link" role="menuitem" aria-label="Naar Zeiklijst Admin">
+              <img src="admin/icons/icon-192.png" alt="" width="24" height="24">
+              <span>Zeiklijst Admin</span>
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   </header>
 
   <main>
-    <section>
-      <h2>Openstaande taken</h2>
-      <div id="task-list"></div>
+    <div id="filter-chips" class="filter-chips" role="toolbar" aria-label="Filter taken">
+      <button type="button" class="chip" data-filter="all">Alles</button>
+      <button type="button" class="chip" data-filter="mine">Mijn taken</button>
+      <button type="button" class="chip" data-filter="allen">Allen</button>
+      <button type="button" class="chip" data-filter="unassigned">Niet toegewezen</button>
+      <button type="button" class="chip" data-filter="pending">Ter controle</button>
+    </div>
+    <p id="filter-hint" class="filter-hint hidden"></p>
+    <section id="section-open" class="task-section">
+      <h2 id="heading-open">Openstaande taken</h2>
+      <div id="task-list" class="task-list"></div>
     </section>
+    <section id="section-pending" class="task-section">
+      <h2 id="heading-pending">Ter controle</h2>
+      <div id="pending-list" class="task-list"></div>
+    </section>
+    <p id="board-empty" class="empty-state hidden">Geen taken in dit filter.</p>
   </main>
 
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -50,6 +71,7 @@
       <p id="modal-location" hidden></p>
       <p id="modal-assignee"></p>
       <div id="modal-status"></div>
+      <div id="modal-rejection" class="rejection-note hidden"></div>
       <div id="modal-description"></div>
       <div id="modal-photos"></div>
       <div id="tick-by-row" class="hidden">
@@ -64,6 +86,13 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=11"></script>
+  <div id="lightbox" class="lightbox hidden" role="dialog" aria-modal="true" aria-label="Foto">
+    <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Sluiten">&times;</button>
+    <img id="lightbox-img" alt="Foto bij taak">
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script type="module" src="app.js?v=12"></script>
 </body>
 </html>
