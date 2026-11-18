@@ -14,13 +14,14 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=12">
+  <link rel="stylesheet" href="styles.css?v=13">
 </head>
-<body class="guest-app">
+<body class="guest-app is-locked">
   <header>
     <div class="header-inner">
       <h1>Zeiklijst Live</h1>
       <div class="header-actions">
+        <span id="header-user" class="header-user hidden"></span>
         <div class="view-toggle" role="group" aria-label="Weergave">
           <button type="button" id="view-list" class="view-btn" aria-pressed="true" aria-label="Lijstweergave" title="Lijstweergave">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2.5H4V6zm0 4.75h16v2.5H4v-2.5zm0 4.75h16V18H4v-2.5z"/></svg>
@@ -34,15 +35,71 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
           </button>
           <div id="header-more-menu" class="header-more-menu hidden" role="menu">
+            <p id="menu-user" class="menu-user hidden"></p>
             <a href="admin/" class="admin-menu-link" role="menuitem" aria-label="Naar Zeiklijst Admin">
               <img src="admin/icons/icon-192.png" alt="" width="24" height="24">
               <span>Zeiklijst Admin</span>
             </a>
+            <button type="button" id="logout-menu-btn" class="menu-action hidden" role="menuitem">Uitloggen</button>
           </div>
         </div>
       </div>
     </div>
   </header>
+
+  <button type="button" id="update-banner" class="update-banner hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
+
+  <div id="staff-login" class="staff-login">
+    <div class="login-screen-card staff-login-card">
+      <form id="staff-name-form">
+        <h2>Inloggen</h2>
+        <p class="staff-login-hint">Typ je naam om verder te gaan.</p>
+        <label>
+          Jouw naam
+          <input type="text" id="staff-name-input" name="staff-name" autocomplete="username" autocapitalize="words" spellcheck="false" required>
+        </label>
+        <p id="staff-name-error" class="form-error hidden"></p>
+        <div class="form-actions">
+          <button type="submit">Verder</button>
+        </div>
+      </form>
+
+      <form id="staff-pin-setup-form" class="hidden">
+        <h2>Pincode instellen</h2>
+        <p class="staff-login-hint">Kies een pincode van 4 tot 6 cijfers.</p>
+        <input type="text" id="staff-setup-username" name="username" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true">
+        <label>
+          Pincode invoeren
+          <input type="password" id="staff-pin-new" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" required>
+        </label>
+        <label>
+          Pincode bevestigen
+          <input type="password" id="staff-pin-confirm" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" required>
+        </label>
+        <p id="staff-pin-setup-error" class="form-error hidden"></p>
+        <div class="form-actions">
+          <button type="submit">Opslaan</button>
+        </div>
+        <button type="button" class="text-btn" id="staff-setup-back">Andere naam</button>
+      </form>
+
+      <form id="staff-pin-form" class="hidden">
+        <h2>Pincode invoeren</h2>
+        <p class="staff-login-hint" id="staff-pin-hello">Vul je pincode in.</p>
+        <input type="text" id="staff-pin-username" name="username" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true">
+        <label>
+          Pincode
+          <input type="password" id="staff-pin-input" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="current-password" required>
+        </label>
+        <p id="staff-pin-error" class="form-error hidden"></p>
+        <div class="form-actions">
+          <button type="submit">Inloggen</button>
+        </div>
+        <button type="button" class="secondary" id="staff-pin-forgot">Pincode vergeten</button>
+        <button type="button" class="text-btn" id="staff-pin-back">Andere naam</button>
+      </form>
+    </div>
+  </div>
 
   <main>
     <div id="filter-chips" class="filter-chips" role="toolbar" aria-label="Filter taken">
@@ -75,12 +132,7 @@
       <div id="modal-description"></div>
       <div id="modal-photos"></div>
       <div id="tick-by-row" class="hidden">
-        <label>
-          Afgevinkt door (optioneel)
-          <select id="tick-by-select">
-            <option value="">— Geen naam —</option>
-          </select>
-        </label>
+        <p id="tick-by-fixed">Afgevinkt door: <strong id="tick-by-name"></strong></p>
       </div>
       <div id="modal-actions"></div>
     </div>
@@ -93,6 +145,6 @@
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=12"></script>
+  <script type="module" src="app.js?v=13"></script>
 </body>
 </html>

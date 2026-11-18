@@ -1,9 +1,4 @@
 import {
-  auth,
-  onAuthStateChanged,
-  signInAnonymously
-} from "./firebase-init.js";
-import {
   db,
   doc,
   updateDoc,
@@ -16,8 +11,14 @@ import {
   escapeAttr,
   formatDateTime,
   assigneeLabel,
-  localDateKey
+  localDateKey,
+  normalizeName
 } from "./shared.js";
+import {
+  getCurrentStaff,
+  initStaffAuth,
+  setStaffDisplayName
+} from "./staff-auth.js";
 
 let tasks = [];
 let templates = [];
@@ -29,7 +30,6 @@ let generating = false;
 let toastTimer = 0;
 
 const VIEW_KEY = "zeiklijst-view";
-const TICK_BY_KEY = "zeiklijst-tick-by";
 const FILTER_KEY = "zeiklijst-filter";
 const FILTERS = new Set(["all", "mine", "allen", "unassigned", "pending"]);
 
@@ -37,22 +37,13 @@ function isRecurring(task) {
   return Boolean(task.recurringId);
 }
 
-function savedTickBy() {
-  return (localStorage.getItem(TICK_BY_KEY) || "").trim();
-}
-
-function rememberTickBy(name) {
-  const value = (name || "").trim();
-  if (value) localStorage.setItem(TICK_BY_KEY, value);
-}
-
 function currentFilter() {
-  const value = localStorage.getItem(FILTER_KEY) || "all";
-  return FILTERS.has(value) ? value : "all";
+  const value = localStorage.getItem(FILTER_KEY) || "mine";
+  return FILTERS.has(value) ? value : "mine";
 }
 
 function setFilter(value) {
-  const next = FILTERS.has(value) ? value : "all";
+  const next = FILTERS.has(value) ? value : "mine";
   localStorage.setItem(FILTER_KEY, next);
   renderTasks();
 }
@@ -67,9 +58,13 @@ function isUnassigned(task) {
 
 function isMine(task) {
   if (isAllen(task)) return true;
-  const me = savedTickBy();
-  if (!me) return false;
-  return (task.assigneeName || "").trim().toLowerCase() === me.toLowerCase();
+  const staff = getCurrentStaff();
+  if (!staff) return false;
+  const me = normalizeName(staff.name);
+  if (me && (normalizeName(task.assigneeName) === me || normalizeName(task.pendingBy) === me)) {
+    return true;
+  }
+  return Boolean(staff.employeeId) && task.assigneeId === staff.employeeId;
 }
 
 function matchesFilter(task, filter) {
@@ -149,23 +144,45 @@ async function maybeGenerate() {
   }
 }
 
+let unsubscribers = [];
+
 function startListeners() {
   if (listenersStarted) return;
   listenersStarted = true;
-  listenCollection("tasks", normalizeTask, (list) => {
+  unsubscribers.push(listenCollection("tasks", normalizeTask, (list) => {
     tasks = list;
     renderTasks();
     if (currentTaskId) openTask(currentTaskId);
-  });
-  listenCollection("recurring", normalizeTemplate, async (list) => {
+  }));
+  unsubscribers.push(listenCollection("recurring", normalizeTemplate, async (list) => {
     templates = list;
     await maybeGenerate();
     renderTasks();
-  });
-  listenCollection("employees", normalizeEmployee, (list) => {
+  }));
+  unsubscribers.push(listenCollection("employees", normalizeEmployee, (list) => {
     employees = list.filter((e) => e.active).sort((a, b) => a.name.localeCompare(b.name, "nl"));
+    const staff = getCurrentStaff();
+    if (staff) {
+      const mine = employees.find((e) => e.id === staff.employeeId) || list.find((e) => e.id === staff.employeeId);
+      if (mine && mine.name) setStaffDisplayName(mine.name);
+    }
     if (currentTaskId) openTask(currentTaskId);
+  }));
+}
+
+function stopListeners() {
+  unsubscribers.forEach((stop) => {
+    try {
+      if (typeof stop === "function") stop();
+    } catch {
+      // Already torn down.
+    }
   });
+  unsubscribers = [];
+  listenersStarted = false;
+  tasks = [];
+  templates = [];
+  employees = [];
 }
 
 function currentView() {
@@ -192,10 +209,6 @@ function setupUi() {
   };
   document.getElementById("view-list").onclick = () => applyView("list");
   document.getElementById("view-tiles").onclick = () => applyView("tiles");
-  document.getElementById("tick-by-select").addEventListener("change", (event) => {
-    rememberTickBy(event.target.value);
-    renderFilterHint();
-  });
   document.getElementById("filter-chips").addEventListener("click", (event) => {
     const btn = event.target.closest("[data-filter]");
     if (!btn) return;
@@ -203,14 +216,12 @@ function setupUi() {
   });
   setupHeaderMenu();
   setupLightbox();
+  setupUpdateBanner();
   applyView(currentView());
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkDateChange();
   });
   setInterval(checkDateChange, 60000);
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
-  }
 }
 
 function setupHeaderMenu() {
@@ -267,30 +278,16 @@ function checkDateChange() {
   }
 }
 
-function fillTickSelect() {
-  const select = document.getElementById("tick-by-select");
-  const remembered = savedTickBy();
-  const current = select.value || remembered;
-  select.innerHTML = `<option value="">— Geen naam —</option>` + employees.map((e) =>
-    `<option value="${escapeAttr(e.name)}">${escapeHtml(e.name)}</option>`
-  ).join("");
-  if ([...select.options].some((option) => option.value === current)) {
-    select.value = current;
-  } else if ([...select.options].some((option) => option.value === remembered)) {
-    select.value = remembered;
-  }
+function fillTickName() {
+  const el = document.getElementById("tick-by-name");
+  const staff = getCurrentStaff();
+  if (el) el.textContent = staff && staff.name ? staff.name : "";
 }
 
 function renderFilterHint() {
   const hint = document.getElementById("filter-hint");
-  const filter = currentFilter();
-  if (filter === "mine" && !savedTickBy()) {
-    hint.textContent = "Kies je naam bij “Afgevinkt door” om jouw taken te zien. Tot die tijd toont “Mijn taken” alleen taken voor Allen.";
-    hint.classList.remove("hidden");
-  } else {
-    hint.textContent = "";
-    hint.classList.add("hidden");
-  }
+  hint.textContent = "";
+  hint.classList.add("hidden");
 }
 
 function renderChips() {
@@ -460,7 +457,7 @@ function openTask(id) {
 
   const tickRow = document.getElementById("tick-by-row");
   tickRow.classList.toggle("hidden", task.status !== "open");
-  if (task.status === "open") fillTickSelect();
+  if (task.status === "open") fillTickName();
 
   const actions = document.getElementById("modal-actions");
   actions.innerHTML = "";
@@ -507,8 +504,12 @@ function showToast(text, type) {
 async function markPending(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "open") return;
-  const pendingBy = document.getElementById("tick-by-select").value.trim() || null;
-  if (pendingBy) rememberTickBy(pendingBy);
+  const staff = getCurrentStaff();
+  const pendingBy = staff && staff.name ? staff.name : "";
+  if (!pendingBy) {
+    showToast("Je bent niet ingelogd.", "error");
+    return;
+  }
   try {
     await updateDoc(doc(db, "tasks", id), {
       status: "pending",
@@ -538,17 +539,63 @@ async function unmarkPending(id) {
   }
 }
 
-onAuthStateChanged(auth, async (user) => {
-  if (!user) {
-    try {
-      await signInAnonymously(auth);
-    } catch {
-      document.getElementById("task-list").innerHTML = '<p class="empty-state">Kon niet verbinden. Controleer je internetverbinding.</p>';
-      document.getElementById("section-open").hidden = false;
+function setupUpdateBanner() {
+  const banner = document.getElementById("update-banner");
+  if (!banner) return;
+  let reloading = false;
+  const params = new URLSearchParams(location.search);
+  const forced = params.get("showUpdate") === "1";
+
+  const show = () => banner.classList.remove("hidden");
+  let waitingWorker = null;
+
+  const attachWaiting = (worker) => {
+    if (!worker) return;
+    waitingWorker = worker;
+    show();
+  };
+
+  banner.addEventListener("click", () => {
+    if (waitingWorker) {
+      waitingWorker.postMessage({ type: "SKIP_WAITING" });
+      return;
     }
-    return;
-  }
-  startListeners();
-});
+    if (forced) location.reload();
+  });
+
+  if (forced) show();
+
+  if (!("serviceWorker" in navigator)) return;
+
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
+  navigator.serviceWorker.register("./sw.js").then((reg) => {
+    if (reg.waiting) attachWaiting(reg.waiting);
+    reg.addEventListener("updatefound", () => {
+      const installing = reg.installing;
+      if (!installing) return;
+      installing.addEventListener("statechange", () => {
+        if (installing.state === "installed" && navigator.serviceWorker.controller) {
+          attachWaiting(reg.waiting || installing);
+        }
+      });
+    });
+  }).catch(() => {});
+}
 
 setupUi();
+initStaffAuth({
+  showToast,
+  onLoggedIn() {
+    startListeners();
+  },
+  onLoggedOut() {
+    closeModal();
+    stopListeners();
+    renderTasks();
+  }
+});
