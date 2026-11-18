@@ -216,6 +216,7 @@ export function normalizeTask(id, data) {
     createdAt: toIso(d.createdAt || d.created) || "",
     pendingAt: toIso(d.pendingAt),
     pendingBy: d.pendingBy || null,
+    pendingByEmployeeId: d.pendingByEmployeeId || null,
     completedAt: toIso(d.completedAt || d.completed),
     recurringId: d.recurringId || d.templateId || null,
     occurrenceDate: d.occurrenceDate || d.instanceDate || null,
@@ -263,7 +264,8 @@ export function normalizeEmployee(id, data) {
     id,
     name: d.name || "",
     active: d.active !== false,
-    createdAt: toIso(d.createdAt) || ""
+    createdAt: toIso(d.createdAt) || "",
+    pinVersion: Number.isFinite(Number(d.pinVersion)) ? Number(d.pinVersion) : 0
   };
 }
 
