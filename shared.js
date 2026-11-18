@@ -124,6 +124,18 @@ export function employeeSlug(name) {
   return "emp-" + String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
+export function normalizeName(name) {
+  return String(name || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function staffEmail(employeeId, pinVersion) {
+  return `emp-${employeeId}-v${Number(pinVersion) || 0}@zeiklijst.app`;
+}
+
+export function staffPassword(pin, employeeId) {
+  return `zl-${pin}-${employeeId}`;
+}
+
 export function assigneeLabel(task) {
   if (task.assigneeId === "ALLEN") return "Allen";
   if (task.assigneeName) return task.assigneeName;
