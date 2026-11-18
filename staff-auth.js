@@ -335,7 +335,7 @@ async function onNameSubmit(event) {
   }
   const nameKey = normalizeName(typed);
   if (!nameKey) {
-    setError("staff-name-error", "Naam niet gevonden");
+    setError("staff-name-error", "Medewerker niet gevonden");
     return;
   }
   setBusy(form, true);
@@ -343,7 +343,7 @@ async function onNameSubmit(event) {
     await ensureAnonymous();
     const index = await readNameIndex(nameKey);
     if (!index) {
-      setError("staff-name-error", "Naam niet gevonden");
+      setError("staff-name-error", "Medewerker niet gevonden");
       return;
     }
     pending = {
