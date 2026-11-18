@@ -1,5 +1,5 @@
 importScripts("./app-version.js");
-const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v15";
+const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v16";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
@@ -14,6 +14,10 @@ const ASSETS = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
+  "./icons/icon-maskable-192.png",
+  "./icons/icon-maskable-512.png",
+  "./icons/favicon-32.png",
+  "./favicon.ico",
   "./fonts/rubik-dirt.woff2",
   "./fonts/protest-guerrilla.woff2",
   "./fonts/rubik-distressed.woff2",
