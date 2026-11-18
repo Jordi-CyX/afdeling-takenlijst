@@ -21,7 +21,6 @@ import {
   setDoc,
   writeBatch,
   normalizeName,
-  staffEmail,
   staffPassword,
   startCodeEmail,
   normalizeStartCode,
@@ -35,9 +34,9 @@ import {
 //   startCodeEmail(employeeId, pinVersion, code) -> one claim batch.
 // - Login: name -> nameIndex {employeeId, hasPin, pinVersion, loginKey}
 //   -> startCodeEmail(employeeId, pinVersion, loginKey) + PIN.
-// - Accounts from before start codes (hasPin without loginKey) still log in
-//   with the old staffEmail(employeeId, pinVersion) as long as the rules allow
-//   it; if that fails they are asked for a new start code.
+// - No loginKey (account from before start codes) or hasPin false: no sign-in
+//   attempt at all, straight to the start code screen.
+// - A restored session whose staffAccounts doc has no startCode is signed out.
 // - There is no way to claim an account with only a name.
 
 const STORAGE_ID = "zeiklijst-staff-id";
@@ -89,10 +88,7 @@ function loginKeyOf(value) {
 }
 
 function expectedEmail(staff) {
-  const email = staff.loginKey
-    ? startCodeEmail(staff.employeeId, staff.pinVersion, staff.loginKey)
-    : staffEmail(staff.employeeId, staff.pinVersion); // pre-start-code account
-  return email.toLowerCase();
+  return startCodeEmail(staff.employeeId, staff.pinVersion, staff.loginKey).toLowerCase();
 }
 
 function storedStaff() {
@@ -245,8 +241,8 @@ function showStep(step, options = {}) {
   ["staff-name-error", "staff-code-error", "staff-pin-setup-error", "staff-pin-error"].forEach((id) => setError(id, ""));
   setNotice("staff-login-notice", step === "name" ? options.notice || "" : "");
   setNotice("staff-pin-notice", step === "pin" ? options.notice || "" : "");
+  setNotice("staff-code-notice", step === "code" ? options.notice || "" : "");
   if (step === "code") {
-    setError("staff-code-error", options.notice || "");
     const codeInput = $("staff-code-input");
     if (codeInput) codeInput.value = "";
   }
@@ -383,9 +379,7 @@ async function refuseSession(message) {
 async function finishStaffSession(staff) {
   const check = await checkEmployeeActive(staff);
   if (!check.ok) {
-    // An old (pre-start-code) account that the rules no longer accept.
-    const message = !staff.loginKey && check.message === MSG_NO_ACCESS ? MSG_NEEDS_CODE : check.message;
-    await refuseSession(message);
+    await refuseSession(check.message);
     return false;
   }
   if (check.name) staff.name = check.name;
@@ -417,7 +411,7 @@ async function verifyExistingSession(user) {
   }
   const staff = { ...stored, pinVersion: index.pinVersion, loginKey: index.loginKey };
   const email = String((user && user.email) || "").toLowerCase();
-  if (!index.hasPin || email !== expectedEmail(staff)) {
+  if (!index.hasPin || !index.loginKey || email !== expectedEmail(staff)) {
     // PIN was reset: a new start code is needed.
     await signOut(auth).catch(() => {});
     clearStoredStaff();
@@ -430,8 +424,22 @@ async function verifyExistingSession(user) {
       loginKey: index.loginKey,
       startCode: ""
     };
-    showStep("code", { notice: MSG_PIN_RESET });
+    showStep("code", { notice: index.loginKey ? MSG_PIN_RESET : MSG_NEEDS_CODE });
     return "setup";
+  }
+  // Only accounts created with a start code are accepted (option A).
+  try {
+    const account = await getDoc(doc(db, "staffAccounts", user.uid));
+    const data = account.exists() ? account.data() || {} : {};
+    if (!account.exists() || !isValidStartCode(data.startCode) || data.employeeId !== staff.employeeId) {
+      await refuseSession(MSG_NEEDS_CODE);
+      return "refused";
+    }
+  } catch (err) {
+    if (!(isOffline(err) && !isPermission(err))) {
+      await refuseSession(isPermission(err) ? MSG_NO_ACCESS : lookupErrorMessage(err));
+      return "refused";
+    }
   }
   const ok = await finishStaffSession(staff);
   return ok ? true : "refused";
@@ -479,8 +487,9 @@ async function onNameSubmit(event) {
       loginKey: index.loginKey,
       startCode: ""
     };
-    if (index.hasPin) showStep("pin");
-    else showStep("code");
+    // No sign-in attempt without a start-code account: straight to the code screen.
+    if (index.hasPin && index.loginKey) showStep("pin");
+    else showStep("code", { notice: MSG_NEEDS_CODE });
   } catch (err) {
     setError("staff-name-error", lookupErrorMessage(err));
   } finally {
@@ -658,6 +667,10 @@ async function onPinSubmit(event) {
     showStep("name");
     return;
   }
+  if (!pending.loginKey) {
+    showStep("code", { notice: MSG_NEEDS_CODE });
+    return;
+  }
   if (!validPin(pin)) {
     setError("staff-pin-error", `Vul je pincode van ${PIN_LENGTH} cijfers in.`);
     return;
@@ -675,11 +688,7 @@ async function onPinSubmit(event) {
     await signInWithEmailAndPassword(auth, expectedEmail(staff), staffPassword(pin, staff.employeeId));
     await finishStaffSession(staff);
   } catch (err) {
-    const message = pinAuthErrorMessage(err);
-    // Old login method failed (wrong PIN, or closed in the rules).
-    setError("staff-pin-error", !pending.loginKey && message === "Onjuiste pincode"
-      ? `Inloggen lukt niet. ${MSG_NEEDS_CODE}`
-      : message);
+    setError("staff-pin-error", pinAuthErrorMessage(err));
   } finally {
     setBusy(form, false);
   }
