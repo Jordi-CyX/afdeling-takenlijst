@@ -613,6 +613,15 @@ function locationLabel(item) {
   return `<div class="task-location">${escapeHtml(location)}</div>`;
 }
 
+function assigneeBanner(task) {
+  const name = (task.assigneeName || "").trim();
+  const isAllen = task.assigneeId === "ALLEN" || name.toLowerCase() === "allen";
+  const unassigned = !isAllen && !name;
+  const label = unassigned ? "Niet toegewezen" : (isAllen ? "Allen" : name);
+  const cls = unassigned ? " task-assignee-banner--muted" : "";
+  return `<div class="task-assignee-banner${cls}">${escapeHtml(label)}</div>`;
+}
+
 function taskItemHtml(task) {
   const badges = [
     `<span class="badge ${task.status}">${task.status === "open" ? "Open" : task.status === "pending" ? "Pending" : "Afgerond"}</span>`
@@ -620,11 +629,14 @@ function taskItemHtml(task) {
   if (isRecurring(task)) badges.unshift('<span class="badge recurring">Herhalend</span>');
   return `
     <div class="task-item ${task.status}" role="button" tabindex="0" data-task-id="${escapeAttr(task.id)}">
-      <div>
-        <div class="task-title">${escapeHtml(task.title)}</div>
-        ${locationLabel(task)}
+      <div class="task-item-main">
+        <div>
+          <div class="task-title">${escapeHtml(task.title)}</div>
+          ${locationLabel(task)}
+        </div>
+        <div class="badge-row">${badges.join("")}</div>
       </div>
-      <div class="badge-row">${badges.join("")}</div>
+      ${assigneeBanner(task)}
     </div>
   `;
 }
