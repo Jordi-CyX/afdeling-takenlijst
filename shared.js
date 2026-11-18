@@ -224,7 +224,11 @@ export function normalizeTask(id, data) {
     rejections: Array.isArray(d.rejections) ? d.rejections : [],
     lastRejectedAt: toIso(d.lastRejectedAt),
     lastRejectionReason: typeof d.lastRejectionReason === "string" ? d.lastRejectionReason : "",
-    location: typeof d.location === "string" ? d.location : ""
+    location: typeof d.location === "string" ? d.location : "",
+    createdByRole: typeof d.createdByRole === "string" ? d.createdByRole : "",
+    createdByEmployeeId: d.createdByEmployeeId || "",
+    createdByName: d.createdByName || "",
+    adminReview: typeof d.adminReview === "string" ? d.adminReview : ""
   };
 }
 
@@ -270,7 +274,7 @@ export function normalizeEmployee(id, data) {
 }
 
 export function serializeTask(task) {
-  return {
+  const payload = {
     title: task.title || "",
     description: task.description || "",
     assigneeId: task.assigneeId || "",
@@ -285,6 +289,13 @@ export function serializeTask(task) {
     photos: Array.isArray(task.photos) ? task.photos : [],
     location: task.location || ""
   };
+  if (task.createdByRole || task.createdByEmployeeId || task.createdByName || task.adminReview) {
+    payload.createdByRole = task.createdByRole || "";
+    payload.createdByEmployeeId = task.createdByEmployeeId || "";
+    payload.createdByName = task.createdByName || "";
+    payload.adminReview = task.adminReview || "";
+  }
+  return payload;
 }
 
 export function serializeTemplate(template) {
