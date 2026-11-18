@@ -192,6 +192,7 @@ service cloud.firestore {
     match /pinResetRequests/{employeeId} {
       allow read, delete: if isAdmin();
       allow create: if isSignedIn() && isValidPinResetCreate(employeeId);
+      allow update: if isSignedIn() && isValidPinResetCreate(employeeId);
     }
 
     function isValidPinResetCreate(employeeId) {
