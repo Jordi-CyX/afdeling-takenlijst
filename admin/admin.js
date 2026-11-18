@@ -35,6 +35,7 @@ import {
   WEEKDAYS,
   SEED_EMPLOYEES,
   employeeSlug,
+  normalizeName,
   STORAGE_TASKS,
   STORAGE_TEMPLATES,
   STORAGE_MIGRATED,
@@ -52,6 +53,13 @@ let knownDate = localDateKey(new Date());
 let listenersStarted = false;
 let generating = false;
 let seededOnce = false;
+let pinResetRequests = [];
+let nameIndexEntries = [];
+let employeesReady = false;
+let nameIndexReady = false;
+let nameIndexSyncing = false;
+let swUpdateHandlerBound = false;
+
 
 const SECTION_KEY = "zeiklijst-admin-section";
 const SECTIONS = ["dashboard", "medewerkers", "taken", "controle", "workflow", "data"];
@@ -163,14 +171,208 @@ function startListeners() {
   });
   listenCollection("employees", normalizeEmployee, (list) => {
     employees = list.sort((a, b) => a.name.localeCompare(b.name, "nl"));
+    employeesReady = true;
     renderAll();
     if (currentTaskId) openTask(currentTaskId);
     if (isAdmin && !seededOnce && employees.length === 0) {
       seededOnce = true;
       seedEmployees().catch(() => {});
     }
-  });
+    syncNameIndex().catch(() => {});
+  }, ignoreListenerError);
+  listenCollection("nameIndex", normalizeNameIndexEntry, (list) => {
+    nameIndexEntries = list;
+    nameIndexReady = true;
+    renderEmployees();
+    renderPinResets();
+    syncNameIndex().catch(() => {});
+  }, ignoreListenerError);
+  listenCollection("pinResetRequests", normalizePinResetRequest, (list) => {
+    pinResetRequests = list.slice().sort((a, b) => String(b.requestedAt || "").localeCompare(String(a.requestedAt || "")));
+    renderPinResets();
+    updateNavBadge();
+  }, ignoreListenerError);
 }
+
+function ignoreListenerError() {
+  // New collections are denied until the pincode rules are published.
+}
+
+function normalizeNameIndexEntry(id, data) {
+  const d = data || {};
+  return {
+    id,
+    employeeId: d.employeeId || "",
+    hasPin: d.hasPin === true,
+    pinVersion: Number.isFinite(Number(d.pinVersion)) ? Number(d.pinVersion) : 0
+  };
+}
+
+function normalizePinResetRequest(id, data) {
+  const d = data || {};
+  return {
+    id,
+    employeeId: d.employeeId || id,
+    name: d.name || "",
+    requestedAt: d.requestedAt && typeof d.requestedAt.toDate === "function"
+      ? d.requestedAt.toDate().toISOString()
+      : (d.requestedAt || "")
+  };
+}
+
+function nameIndexKey(name) {
+  return normalizeName(name);
+}
+
+function nameIndexForEmployee(emp) {
+  if (!emp) return null;
+  const key = nameIndexKey(emp.name);
+  return nameIndexEntries.find((entry) => entry.id === key)
+    || nameIndexEntries.find((entry) => entry.employeeId === emp.id)
+    || null;
+}
+
+function employeeHasPin(emp) {
+  const entry = nameIndexForEmployee(emp);
+  return Boolean(entry && entry.hasPin);
+}
+
+function resetRequestName(req) {
+  const emp = employees.find((e) => e.id === req.employeeId);
+  return (emp && emp.name) || req.name || req.employeeId;
+}
+
+function nameIndexPayload(emp, hasPin) {
+  return {
+    employeeId: emp.id,
+    hasPin: Boolean(hasPin),
+    pinVersion: Number(emp.pinVersion) || 0
+  };
+}
+
+function findNameConflict(name, employeeId) {
+  const key = nameIndexKey(name);
+  if (!key) return "Ongeldige naam.";
+  const taken = employees.find((e) => e.id !== employeeId && nameIndexKey(e.name) === key);
+  if (taken) return `De naam ${taken.name} is al in gebruik.`;
+  const entry = nameIndexEntries.find((e) => e.id === key && e.employeeId && e.employeeId !== employeeId);
+  if (entry) return "Deze naam is al gekoppeld aan een andere medewerker.";
+  return "";
+}
+
+async function syncNameIndex({ force = false } = {}) {
+  if (!isAdmin || nameIndexSyncing || !employeesReady || !nameIndexReady) return { wrote: 0, conflicts: [] };
+  const conflicts = [];
+  const writes = [];
+  for (const emp of employees) {
+    const key = nameIndexKey(emp.name);
+    if (!key) continue;
+    const existing = nameIndexEntries.find((entry) => entry.id === key);
+    const pinVersion = Number(emp.pinVersion) || 0;
+    if (!existing) {
+      const byId = nameIndexEntries.find((entry) => entry.employeeId === emp.id);
+      writes.push({
+        key,
+        data: {
+          employeeId: emp.id,
+          hasPin: force ? Boolean(byId && byId.hasPin) : false,
+          pinVersion
+        }
+      });
+      continue;
+    }
+    if (existing.employeeId && existing.employeeId !== emp.id) {
+      conflicts.push(emp.name);
+      continue;
+    }
+    if (force && (existing.employeeId !== emp.id || existing.pinVersion !== pinVersion)) {
+      writes.push({
+        key,
+        data: { employeeId: emp.id, hasPin: existing.hasPin === true, pinVersion }
+      });
+    }
+  }
+  if (!writes.length) return { wrote: 0, conflicts };
+  nameIndexSyncing = true;
+  try {
+    const ok = await safeWrite(async () => {
+      let batch = writeBatch(db);
+      let count = 0;
+      for (const item of writes) {
+        batch.set(doc(db, "nameIndex", item.key), item.data, { merge: true });
+        count += 1;
+        if (count >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+      if (count) await batch.commit();
+    });
+    return { wrote: ok ? writes.length : 0, conflicts };
+  } finally {
+    nameIndexSyncing = false;
+  }
+}
+
+async function rebuildNameIndex() {
+  const result = await syncNameIndex({ force: true });
+  if (result.wrote) showToast(`Naamindex bijgewerkt (${result.wrote} ${result.wrote === 1 ? "item" : "items"}).`, "ok");
+  else if (!result.conflicts.length) showToast("Naamindex was al bij. Ontbrekende namen worden ook automatisch aangevuld.", "ok");
+  if (result.conflicts.length) showToast("Sommige namen botsen in de index: " + result.conflicts.join(", "));
+}
+
+function renderPinResets() {
+  const targets = ["dashboard-pin-resets", "medewerkers-pin-resets"];
+  const html = pinResetRequests.length
+    ? `<h3>Pincode vergeten</h3>` + pinResetRequests.map((req) => `
+        <div class="pin-reset-item">
+          <p><strong>${escapeHtml(resetRequestName(req))}</strong> heeft pincode vergeten</p>
+          <button type="button" data-reset-pin="${escapeAttr(req.employeeId)}">Pincode resetten</button>
+        </div>
+      `).join("")
+    : "";
+  for (const id of targets) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.innerHTML = html;
+    el.classList.toggle("hidden", !pinResetRequests.length);
+    el.querySelectorAll("[data-reset-pin]").forEach((btn) => {
+      btn.onclick = () => resetEmployeePin(btn.dataset.resetPin);
+    });
+  }
+}
+
+async function resetEmployeePin(id) {
+  const emp = employees.find((e) => e.id === id);
+  const req = pinResetRequests.find((r) => r.employeeId === id);
+  const name = (emp && emp.name) || (req && req.name) || id;
+  if (!emp && !req) return;
+  const confirmed = await confirmAction(
+    `Pincode van ${name} resetten? De medewerker moet daarna een nieuwe pincode instellen.`,
+    { title: "Pincode resetten", confirmText: "Pincode resetten", danger: true }
+  );
+  if (!confirmed) return;
+  const pinVersion = (Number(emp && emp.pinVersion) || 0) + 1;
+  const key = emp ? nameIndexKey(emp.name) : (req && nameIndexKey(req.name));
+  const ok = await safeWrite(async () => {
+    const batch = writeBatch(db);
+    if (emp) {
+      batch.update(doc(db, "employees", emp.id), { pinVersion });
+    }
+    if (key) {
+      batch.set(doc(db, "nameIndex", key), {
+        employeeId: id,
+        hasPin: false,
+        pinVersion
+      }, { merge: true });
+    }
+    batch.delete(doc(db, "pinResetRequests", id));
+    await batch.commit();
+  });
+  if (ok) showToast(`Pincode van ${name} is gereset.`, "ok");
+}
+
 
 function applyAuthUi() {
   document.getElementById("login-screen").classList.toggle("hidden", isAdmin);
@@ -251,6 +453,7 @@ function setupUi() {
     if (event.target.id === "app-dialog") closeDialog({ ok: false });
   };
   document.getElementById("cleanup-btn").onclick = cleanupOldCompleted;
+  document.getElementById("rebuild-name-index-btn").onclick = rebuildNameIndex;
   document.getElementById("workflow-period").onchange = renderWorkflow;
   document.getElementById("export-btn").onclick = exportData;
   document.getElementById("import-btn").onclick = () => document.getElementById("import-file").click();
@@ -277,9 +480,35 @@ function setupUi() {
     if (!document.hidden) checkDateChange();
   });
   setInterval(checkDateChange, 60000);
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
-  }
+  setupServiceWorkerUpdates();
+}
+
+function setupServiceWorkerUpdates() {
+  if (!("serviceWorker" in navigator)) return;
+  const bar = document.getElementById("update-bar");
+  const offer = (worker) => {
+    if (!bar || !worker) return;
+    bar.classList.remove("hidden");
+    bar.onclick = () => worker.postMessage({ type: "SKIP_WAITING" });
+  };
+  navigator.serviceWorker.register("./sw.js").then((reg) => {
+    if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+    reg.addEventListener("updatefound", () => {
+      const worker = reg.installing;
+      if (!worker) return;
+      worker.addEventListener("statechange", () => {
+        if (worker.state === "installed" && navigator.serviceWorker.controller) offer(worker);
+      });
+    });
+  }).catch(() => {});
+  if (swUpdateHandlerBound) return;
+  swUpdateHandlerBound = true;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  });
 }
 
 function checkDateChange() {
@@ -650,6 +879,13 @@ function updateNavBadge() {
     el.textContent = String(count);
     el.classList.toggle("hidden", count < 1);
   });
+  const pinCount = pinResetRequests.length;
+  ["nav-pin-badge", "nav-medewerkers-badge"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = String(pinCount);
+    el.classList.toggle("hidden", pinCount < 1);
+  });
 }
 
 function renderAll() {
@@ -662,6 +898,7 @@ function renderAll() {
   renderEmployees();
   renderControle();
   renderWorkflow();
+  renderPinResets();
   updateNavBadge();
 }
 
@@ -1095,21 +1332,31 @@ function renderEmployees() {
     list.innerHTML = '<p class="empty-state">Nog geen medewerkers. Vul de standaardlijst of voeg zelf namen toe.</p>';
     return;
   }
-  list.innerHTML = employees.map((emp) => `
+  list.innerHTML = employees.map((emp) => {
+    const hasPin = employeeHasPin(emp);
+    return `
     <div class="employee-item">
       <div class="employee-top">
-        <div class="task-title">${escapeHtml(emp.name)}</div>
+        <div>
+          <div class="task-title">${escapeHtml(emp.name)}</div>
+          <p class="employee-pin${hasPin ? " set" : ""}">${hasPin ? "Pincode ingesteld" : "Nog geen pincode"}</p>
+        </div>
         <span class="badge ${emp.active ? "open" : "paused"}">${emp.active ? "Actief" : "Inactief"}</span>
       </div>
       <div class="employee-actions">
         <button type="button" class="secondary" data-rename-emp="${escapeAttr(emp.id)}">Hernoemen</button>
+        <button type="button" class="secondary" data-reset-emp="${escapeAttr(emp.id)}">Pincode resetten</button>
         <button type="button" class="secondary" data-toggle-emp="${escapeAttr(emp.id)}">${emp.active ? "Deactiveren" : "Activeren"}</button>
         <button type="button" class="danger" data-delete-emp="${escapeAttr(emp.id)}">Verwijderen</button>
       </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
   list.querySelectorAll("[data-rename-emp]").forEach((btn) => {
     btn.onclick = () => renameEmployee(btn.dataset.renameEmp);
+  });
+  list.querySelectorAll("[data-reset-emp]").forEach((btn) => {
+    btn.onclick = () => resetEmployeePin(btn.dataset.resetEmp);
   });
   list.querySelectorAll("[data-toggle-emp]").forEach((btn) => {
     btn.onclick = () => toggleEmployee(btn.dataset.toggleEmp);
@@ -1123,23 +1370,43 @@ async function addEmployee(event) {
   event.preventDefault();
   const name = document.getElementById("employee-name").value.trim();
   if (!name) return;
+  const conflict = findNameConflict(name);
+  if (conflict) {
+    showToast(conflict);
+    return;
+  }
   const id = employeeSlug(name);
-  const ok = await safeWrite(() => setDoc(doc(db, "employees", id), {
-    name,
-    active: true,
-    createdAt: new Date().toISOString()
-  }, { merge: true }));
+  if (employees.some((e) => e.id === id)) {
+    showToast("Deze medewerker bestaat al.");
+    return;
+  }
+  const emp = { id, name, active: true, createdAt: new Date().toISOString(), pinVersion: 0 };
+  const ok = await safeWrite(async () => {
+    const batch = writeBatch(db);
+    batch.set(doc(db, "employees", id), { name: emp.name, active: true, createdAt: emp.createdAt, pinVersion: 0 }, { merge: true });
+    batch.set(doc(db, "nameIndex", nameIndexKey(name)), nameIndexPayload(emp, false));
+    await batch.commit();
+  });
   if (ok) document.getElementById("employee-name").value = "";
 }
 
 async function seedEmployees() {
-  const batch = writeBatch(db);
   const now = new Date().toISOString();
+  const batch = writeBatch(db);
+  let writes = 0;
   for (const name of SEED_EMPLOYEES) {
     const id = employeeSlug(name);
     const existing = employees.find((e) => e.id === id);
     if (existing) continue;
-    batch.set(doc(db, "employees", id), { name, active: true, createdAt: now }, { merge: true });
+    if (findNameConflict(name, id)) continue;
+    const emp = { id, name, pinVersion: 0 };
+    batch.set(doc(db, "employees", id), { name, active: true, createdAt: now, pinVersion: 0 }, { merge: true });
+    batch.set(doc(db, "nameIndex", nameIndexKey(name)), nameIndexPayload(emp, false));
+    writes += 1;
+  }
+  if (!writes) {
+    showToast("Standaardlijst stond er al in.", "ok");
+    return;
   }
   await safeWrite(() => batch.commit());
 }
@@ -1161,11 +1428,21 @@ async function renameEmployee(id) {
     if (result.ok && !name) showToast("Vul een naam in.");
     return;
   }
+  const conflict = findNameConflict(name, id);
+  if (conflict) {
+    showToast(conflict);
+    return;
+  }
+  const oldKey = nameIndexKey(emp.name);
+  const newKey = nameIndexKey(name);
+  const existingIndex = nameIndexForEmployee(emp);
   const ok = await safeWrite(async () => {
     let batch = writeBatch(db);
     let count = 0;
-    const add = async (ref, data) => {
-      batch.update(ref, data);
+    const add = async (ref, data, mode = "update") => {
+      if (mode === "set") batch.set(ref, data, { merge: true });
+      else if (mode === "delete") batch.delete(ref);
+      else batch.update(ref, data);
       count += 1;
       if (count >= 400) {
         await batch.commit();
@@ -1174,6 +1451,14 @@ async function renameEmployee(id) {
       }
     };
     await add(doc(db, "employees", id), { name });
+    if (oldKey && newKey && oldKey !== newKey) {
+      await add(doc(db, "nameIndex", newKey), {
+        employeeId: id,
+        hasPin: Boolean(existingIndex && existingIndex.hasPin),
+        pinVersion: Number(emp.pinVersion) || 0
+      }, "set");
+      await add(doc(db, "nameIndex", oldKey), {}, "delete");
+    }
     for (const task of tasks) {
       if (task.assigneeId !== id) continue;
       if (task.status !== "open" && task.status !== "pending") continue;
@@ -1199,7 +1484,14 @@ async function removeEmployee(id) {
   if (!emp) return;
   const ok = await confirmAction(`Medewerker ${emp.name} verwijderen? Bestaande taken blijven bewaard.`, { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
   if (!ok) return;
-  await safeWrite(() => deleteDoc(doc(db, "employees", id)));
+  const key = nameIndexKey(emp.name);
+  await safeWrite(async () => {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, "employees", id));
+    if (key) batch.delete(doc(db, "nameIndex", key));
+    batch.delete(doc(db, "pinResetRequests", id));
+    await batch.commit();
+  });
 }
 
 function openTask(id) {
@@ -1300,7 +1592,8 @@ async function markPending(id) {
   await safeWrite(() => updateDoc(doc(db, "tasks", id), {
     status: "pending",
     pendingAt: new Date().toISOString(),
-    pendingBy: null
+    pendingBy: null,
+    pendingByEmployeeId: null
   }));
 }
 
@@ -1336,6 +1629,7 @@ async function rejectTask(id) {
     status: "open",
     pendingAt: null,
     pendingBy: null,
+    pendingByEmployeeId: null,
     rejectedCount: increment(1),
     lastRejectedAt: at,
     lastRejectionReason: reason,
@@ -1353,7 +1647,8 @@ async function reopenTask(id) {
     status: "open",
     completedAt: null,
     pendingAt: null,
-    pendingBy: null
+    pendingBy: null,
+    pendingByEmployeeId: null
   }));
   if (ok) closeModal();
 }
@@ -1473,6 +1768,7 @@ async function writeAll(tpls, taskList) {
       payload.lastRejectedAt = task.lastRejectedAt || null;
       payload.lastRejectionReason = task.lastRejectionReason || "";
     }
+    if (task.pendingByEmployeeId) payload.pendingByEmployeeId = task.pendingByEmployeeId;
     await add(doc(db, "tasks", id), payload);
   }
   await flush();
@@ -1520,11 +1816,22 @@ async function importData(event) {
         const batch = writeBatch(db);
         for (const emp of emps) {
           const id = emp.id || employeeSlug(emp.name);
+          const pinVersion = Number.isFinite(Number(emp.pinVersion)) ? Number(emp.pinVersion) : 0;
+          const record = { id, name: emp.name || "", pinVersion };
           batch.set(doc(db, "employees", id), {
-            name: emp.name || "",
+            name: record.name,
             active: emp.active !== false,
-            createdAt: emp.createdAt || new Date().toISOString()
+            createdAt: emp.createdAt || new Date().toISOString(),
+            pinVersion
           }, { merge: true });
+          if (record.name) {
+            const existing = nameIndexEntries.find((e) => e.id === nameIndexKey(record.name) && e.employeeId === id);
+            batch.set(doc(db, "nameIndex", nameIndexKey(record.name)), {
+              employeeId: id,
+              hasPin: Boolean(existing && existing.hasPin),
+              pinVersion
+            }, { merge: true });
+          }
         }
         await batch.commit();
       }

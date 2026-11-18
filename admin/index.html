@@ -12,12 +12,13 @@
   <title>Zeiklijst Admin</title>
   <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" type="image/png" href="icons/icon-192.png?v=14">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=14">
-  <link rel="stylesheet" href="../styles.css?v=14">
-  <link rel="stylesheet" href="admin.css?v=14">
+  <link rel="icon" type="image/png" href="icons/icon-192.png?v=15">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=15">
+  <link rel="stylesheet" href="../styles.css?v=15">
+  <link rel="stylesheet" href="admin.css?v=15">
 </head>
 <body>
+  <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
   <header>
     <div class="header-inner">
       <h1>Zeiklijst Admin</h1>
@@ -31,10 +32,16 @@
             <span id="nav-current">Dashboard</span>
             <span class="nav-caret" aria-hidden="true">▾</span>
             <span id="nav-badge" class="nav-badge hidden" aria-label="Pending taken">0</span>
+            <span id="nav-pin-badge" class="nav-badge nav-badge-pin hidden" aria-label="Pincode-verzoeken">0</span>
           </button>
           <ul id="nav-menu" class="nav-menu hidden" role="menu">
             <li role="none"><button type="button" role="menuitem" data-section="dashboard">Dashboard</button></li>
-            <li role="none"><button type="button" role="menuitem" data-section="medewerkers">Medewerkers</button></li>
+            <li role="none">
+              <button type="button" role="menuitem" data-section="medewerkers">
+                Medewerkers
+                <span id="nav-medewerkers-badge" class="nav-badge nav-badge-pin hidden">0</span>
+              </button>
+            </li>
             <li role="none"><button type="button" role="menuitem" data-section="taken">Taken</button></li>
             <li role="none">
               <button type="button" role="menuitem" data-section="controle">
@@ -72,6 +79,7 @@
   <main id="admin-app" class="hidden">
     <section id="section-dashboard" class="admin-section" data-section="dashboard">
       <h2>Dashboard</h2>
+      <div id="dashboard-pin-resets" class="pin-reset-list hidden"></div>
       <div class="stat-cards dashboard-stats">
         <button type="button" class="stat-card" id="stat-open-card">
           <span class="stat-value" id="stat-open">0</span>
@@ -91,6 +99,7 @@
 
     <section id="section-medewerkers" class="admin-section hidden" data-section="medewerkers">
       <h2>Medewerkers</h2>
+      <div id="medewerkers-pin-resets" class="pin-reset-list hidden"></div>
       <form id="add-employee-form">
         <label>
           Nieuwe medewerker
@@ -247,6 +256,11 @@
       <div class="form-actions">
         <button type="button" id="cleanup-btn" class="secondary">Opschonen</button>
       </div>
+      <h3>Naamindex</h3>
+      <p class="section-intro">Bouw of herstel de naamindex voor pincode-login als die nog ontbreekt bij bestaande medewerkers.</p>
+      <div class="form-actions">
+        <button type="button" id="rebuild-name-index-btn" class="secondary">Naamindex opbouwen</button>
+      </div>
     </section>
   </main>
 
@@ -287,6 +301,6 @@
   </div>
   <div id="app-toast" class="app-toast hidden" role="status"></div>
 
-  <script type="module" src="admin.js?v=14"></script>
+  <script type="module" src="admin.js?v=15"></script>
 </body>
 </html>
