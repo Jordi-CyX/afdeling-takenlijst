@@ -2,60 +2,147 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#FF7A00">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Takenlijst">
+  <meta name="description" content="Takenlijst voor de afdeling">
   <title>Takenlijst Afdeling</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
   <header>
-    <h1>Takenlijst Afdeling</h1>
-    <div id="auth-section">
-      <button id="admin-btn">Admin login</button>
-    </div>
-    <div id="admin-controls" class="hidden">
-      <span>Admin modus</span>
-      <button id="logout-btn">Uitloggen</button>
-      <button id="export-btn">Exporteer</button>
-      <input type="file" id="import-file" accept=".json" hidden>
-      <button id="import-btn">Importeer</button>
+    <div class="header-inner">
+      <h1>Takenlijst Afdeling</h1>
+      <div id="auth-section">
+        <button type="button" id="admin-btn">Admin login</button>
+      </div>
+      <div id="admin-controls" class="hidden">
+        <span class="admin-label">Admin modus</span>
+        <button type="button" id="logout-btn" class="secondary">Uitloggen</button>
+        <button type="button" id="export-btn" class="secondary">Exporteer</button>
+        <input type="file" id="import-file" accept="application/json,.json" hidden>
+        <button type="button" id="import-btn" class="secondary">Importeer</button>
+      </div>
     </div>
   </header>
 
   <main>
-    <!-- Admin: nieuwe taak formulier -->
-    <section id="add-task-section" class="hidden">
-      <h2>Nieuwe taak toevoegen</h2>
+    <section id="dashboard" class="hidden">
+      <h2>Dashboard</h2>
+      <div class="stat-cards" id="stat-cards">
+        <article class="stat-card">
+          <span class="stat-value" id="stat-open">0</span>
+          <span class="stat-label">Openstaande taken</span>
+        </article>
+        <article class="stat-card stat-pending">
+          <span class="stat-value" id="stat-pending">0</span>
+          <span class="stat-label">Pending</span>
+        </article>
+        <article class="stat-card stat-done">
+          <span class="stat-value" id="stat-done">0</span>
+          <span class="stat-label">Afgerond</span>
+        </article>
+      </div>
+
+      <h3 id="task-form-heading">Nieuwe taak toevoegen</h3>
       <form id="add-task-form">
-        <input type="text" id="title" placeholder="Titel" required>
+        <input type="text" id="title" placeholder="Titel" required autocomplete="off">
         <textarea id="description" placeholder="Uitgebreide beschrijving" rows="4" required></textarea>
-        <input type="text" id="assignee" placeholder="Toegewezen aan">
-        <label>Foto's (optioneel):
+        <input type="text" id="assignee" placeholder="Toegewezen aan" autocomplete="name">
+        <label class="file-label">
+          Foto's (optioneel)
           <input type="file" id="photos" accept="image/*" multiple>
         </label>
-        <button type="submit">Taak toevoegen</button>
+        <label class="check-row">
+          <input type="checkbox" id="is-recurring">
+          Herhalende taak
+        </label>
+        <div id="recurrence-fields" class="recurrence-fields hidden">
+          <label>
+            Herhaling
+            <select id="recurrence-type">
+              <option value="daily">Elke dag</option>
+              <option value="every_other_day">Om de dag</option>
+              <option value="weekdays">Op specifieke weekdag(en)</option>
+              <option value="date">Op een specifieke datum</option>
+            </select>
+          </label>
+          <label>
+            Startdatum
+            <input type="date" id="recurrence-start">
+          </label>
+          <div id="weekday-picker" class="weekday-picker hidden"></div>
+          <div id="date-picker-fields" class="hidden">
+            <label>
+              Datum
+              <input type="date" id="recurrence-date">
+            </label>
+            <label class="check-row">
+              <input type="checkbox" id="recurrence-monthly">
+              Maandelijks op deze dag van de maand
+            </label>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" id="task-submit-btn">Taak toevoegen</button>
+          <button type="button" id="task-cancel-edit" class="secondary hidden">Annuleren</button>
+        </div>
       </form>
+
+      <h3>Terugkerende taken</h3>
+      <div id="template-list"></div>
     </section>
 
-    <!-- Takenlijst -->
     <section>
       <h2>Openstaande taken</h2>
       <div id="task-list"></div>
     </section>
+
+    <details id="completed-section" class="hidden">
+      <summary>Afgerond <span id="completed-count" class="count-pill">0</span></summary>
+      <div id="completed-list"></div>
+    </details>
   </main>
 
-  <!-- Detail modal -->
-  <div id="modal" class="modal hidden">
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-content">
-      <span class="close">&times;</span>
+      <button type="button" class="close" id="modal-close" aria-label="Sluiten">&times;</button>
       <h2 id="modal-title"></h2>
       <p id="modal-assignee"></p>
       <div id="modal-status"></div>
       <div id="modal-description"></div>
       <div id="modal-photos"></div>
+      <div id="reassign-row" class="hidden">
+        <label>
+          Toewijzen aan
+          <input type="text" id="reassign-input" autocomplete="name">
+        </label>
+        <button type="button" id="reassign-btn">Opslaan</button>
+      </div>
       <div id="modal-actions"></div>
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <div id="login-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="login-title">
+    <div class="modal-content login-card">
+      <h2 id="login-title">Admin login</h2>
+      <form id="login-form">
+        <input type="password" id="login-password" placeholder="Wachtwoord" autocomplete="current-password" required>
+        <p id="login-error" class="form-error hidden">Verkeerd wachtwoord</p>
+        <div class="form-actions">
+          <button type="submit">Inloggen</button>
+          <button type="button" id="login-cancel" class="secondary">Annuleren</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js?v=2"></script>
 </body>
 </html>
