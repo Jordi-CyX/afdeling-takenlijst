@@ -1,15 +1,10 @@
 importScripts("./app-version.js");
-const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v16";
-const FIREBASE_SDK = "12.6.0";
+const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v17";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
-  "./app.js",
   "./app-version.js",
-  "./staff-auth.js",
-  "./shared.js",
-  "./firebase-init.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
@@ -23,25 +18,24 @@ const ASSETS = [
   "./fonts/rubik-distressed.woff2",
   "./fonts/zeiklijst-display.css",
   "./logo.png",
-  "./logo.svg",
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-app.js`,
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-auth.js`,
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-firestore.js`
+  "./logo.svg"
 ];
-const FONT_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
-
-function isFirebaseSdk(url) {
-  return url.hostname === "www.gstatic.com" && url.pathname.startsWith("/firebasejs/");
-}
 
 function isAdminPath(url) {
   return url.pathname.includes("/admin/");
+}
+
+function isHtmlNavigation(request, url) {
+  if (request.mode === "navigate") return true;
+  const path = url.pathname;
+  return path.endsWith("/") || path.endsWith("/index.html");
 }
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
   );
+  self.skipWaiting();
 });
 
 self.addEventListener("message", (event) => {
@@ -66,23 +60,27 @@ self.addEventListener("fetch", (event) => {
   // Do not control or cache the Admin PWA.
   if (isAdminPath(url)) return;
 
-  if (isFirebaseSdk(url) || FONT_HOSTS.has(url.hostname)) {
+  if (url.origin !== self.location.origin) return;
+
+  // Always take index.html / navigations from the network so phones
+  // do not keep serving the old app from cache during maintenance.
+  if (isHtmlNavigation(request, url)) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);
-      const cached = await cache.match(request);
       try {
-        const response = await fetch(request);
+        const response = await fetch(request, { cache: "no-cache" });
         if (response && response.ok) cache.put(request, response.clone());
         return response;
-      } catch (err) {
+      } catch {
+        const cached = await cache.match(request, { ignoreSearch: true });
         if (cached) return cached;
-        throw err;
+        const fallback = await cache.match("./index.html");
+        if (fallback) return fallback;
+        throw new Error("Offline and not cached");
       }
     })());
     return;
   }
-
-  if (url.origin !== self.location.origin) return;
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -93,10 +91,6 @@ self.addEventListener("fetch", (event) => {
     } catch {
       const cached = await cache.match(request, { ignoreSearch: true });
       if (cached) return cached;
-      if (request.mode === "navigate") {
-        const fallback = await cache.match("./index.html");
-        if (fallback) return fallback;
-      }
       throw new Error("Offline and not cached");
     }
   })());

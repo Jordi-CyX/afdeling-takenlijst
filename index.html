@@ -10,210 +10,41 @@
   <meta name="apple-mobile-web-app-title" content="Zeiklijst">
   <meta name="description" content="Zeiklijst Live — takenlijst voor intern afdelingsgebruik">
   <title>Zeiklijst Live</title>
-  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
-  <link rel="manifest" href="manifest.webmanifest?v=16">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=16">
-  <link rel="icon" href="favicon.ico?v=16" sizes="any">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=16">
-  <link rel="stylesheet" href="styles.css?v=16">
+  <link rel="manifest" href="manifest.webmanifest?v=17">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=17">
+  <link rel="icon" href="favicon.ico?v=17" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=17">
+  <link rel="stylesheet" href="styles.css?v=17">
 </head>
-<body class="guest-app is-locked">
+<body class="guest-app is-maintenance">
   <header>
     <div class="header-inner">
       <h1>Zeiklijst Live</h1>
-      <div class="header-actions">
-        <span id="header-user" class="header-user hidden"></span>
-        <div class="view-toggle" role="group" aria-label="Weergave">
-          <button type="button" id="view-list" class="view-btn" aria-pressed="true" aria-label="Lijstweergave" title="Lijstweergave">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2.5H4V6zm0 4.75h16v2.5H4v-2.5zm0 4.75h16V18H4v-2.5z"/></svg>
-          </button>
-          <button type="button" id="view-tiles" class="view-btn" aria-pressed="false" aria-label="Tegelweergave" title="Tegelweergave">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg>
-          </button>
-        </div>
-        <div class="header-more">
-          <button type="button" id="header-more-btn" class="header-more-btn" aria-expanded="false" aria-haspopup="true" aria-controls="header-more-menu" aria-label="Meer opties" title="Meer">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-          </button>
-          <div id="header-more-menu" class="header-more-menu hidden" role="menu">
-            <p id="menu-user" class="menu-user hidden"></p>
-            <a href="admin/" class="admin-menu-link" role="menuitem" aria-label="Naar Zeiklijst Admin">
-              <img src="admin/icons/icon-192.png" alt="" width="24" height="24">
-              <span>Zeiklijst Admin</span>
-            </a>
-            <button type="button" id="report-menu-btn" class="menu-action hidden" role="menuitem">Fout melden</button>
-            <button type="button" id="logout-menu-btn" class="menu-action hidden" role="menuitem">Uitloggen</button>
-          </div>
-        </div>
-      </div>
     </div>
   </header>
 
-  <button type="button" id="update-banner" class="update-banner hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
-
-  <div id="staff-login" class="staff-login">
-    <div class="login-screen-card staff-login-card">
-      <form id="staff-name-form">
-        <h2>Inloggen</h2>
-        <p class="staff-login-hint">Typ je naam om verder te gaan.</p>
-        <label>
-          Jouw naam
-          <input type="text" id="staff-name-input" name="staff-name" autocomplete="username" autocapitalize="words" spellcheck="false" required>
-        </label>
-        <p id="staff-name-error" class="form-error hidden"></p>
-        <div class="form-actions">
-          <button type="submit">Verder</button>
-        </div>
-      </form>
-
-      <form id="staff-pin-setup-form" class="hidden">
-        <h2>Pincode instellen</h2>
-        <p class="staff-login-hint">Kies een pincode van 4 tot 6 cijfers.</p>
-        <input type="text" id="staff-setup-username" name="username" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true">
-        <label>
-          Pincode invoeren
-          <input type="password" id="staff-pin-new" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" required>
-        </label>
-        <label>
-          Pincode bevestigen
-          <input type="password" id="staff-pin-confirm" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" required>
-        </label>
-        <p id="staff-pin-setup-error" class="form-error hidden"></p>
-        <div class="form-actions">
-          <button type="submit">Opslaan</button>
-        </div>
-        <button type="button" class="text-btn" id="staff-setup-back">Andere naam</button>
-      </form>
-
-      <form id="staff-pin-form" class="hidden">
-        <h2>Pincode invoeren</h2>
-        <p class="staff-login-hint" id="staff-pin-hello">Vul je pincode in.</p>
-        <input type="text" id="staff-pin-username" name="username" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true">
-        <label>
-          Pincode
-          <input type="password" id="staff-pin-input" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="current-password" required>
-        </label>
-        <p id="staff-pin-error" class="form-error hidden"></p>
-        <div class="form-actions">
-          <button type="submit">Inloggen</button>
-        </div>
-        <button type="button" class="secondary" id="staff-pin-forgot">Pincode vergeten</button>
-        <button type="button" class="text-btn" id="staff-pin-back">Andere naam</button>
-      </form>
+  <main id="maintenance" class="maintenance-screen">
+    <div class="login-screen-card staff-login-card maintenance-card">
+      <img src="logo.png?v=17" alt="" class="maintenance-logo" width="120" height="120">
+      <h2>Tijdelijk niet beschikbaar wegens onderhoud</h2>
     </div>
-  </div>
-
-  <main>
-    <div id="filter-chips" class="filter-chips" role="toolbar" aria-label="Filter taken">
-      <button type="button" class="chip" data-filter="all">Alles</button>
-      <button type="button" class="chip" data-filter="mine">Mijn taken</button>
-      <button type="button" class="chip" data-filter="allen">Allen</button>
-      <button type="button" class="chip" data-filter="unassigned">Niet toegewezen</button>
-      <button type="button" class="chip" data-filter="pending">Ter controle</button>
-    </div>
-    <p id="filter-hint" class="filter-hint hidden"></p>
-    <section id="section-open" class="task-section">
-      <h2 id="heading-open">Openstaande taken</h2>
-      <div id="task-list" class="task-list"></div>
-    </section>
-    <section id="section-pending" class="task-section">
-      <h2 id="heading-pending">Ter controle</h2>
-      <div id="pending-list" class="task-list"></div>
-    </section>
-    <p id="board-empty" class="empty-state hidden">Geen taken in dit filter.</p>
   </main>
 
-  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-    <div class="modal-content">
-      <button type="button" class="close" id="modal-close" aria-label="Sluiten">&times;</button>
-      <h2 id="modal-title"></h2>
-      <p id="modal-location" hidden></p>
-      <p id="modal-assignee"></p>
-      <div id="modal-status"></div>
-      <div id="modal-rejection" class="rejection-note hidden"></div>
-      <div id="modal-description"></div>
-      <div id="modal-photos"></div>
-      <div id="tick-by-row" class="hidden">
-        <p id="tick-by-fixed">Afgevinkt door: <strong id="tick-by-name"></strong></p>
-      </div>
-      <div id="modal-actions"></div>
-    </div>
-  </div>
-
-  <div id="lightbox" class="lightbox hidden" role="dialog" aria-modal="true" aria-label="Foto">
-    <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Sluiten">&times;</button>
-    <img id="lightbox-img" alt="Foto bij taak">
-  </div>
-
-  <button type="button" id="add-task-fab" class="add-task-fab" aria-label="Taak toevoegen" title="Taak toevoegen">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
-  </button>
-
-  <div id="add-task-page" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-task-heading">
-    <div class="modal-content sheet-content">
-      <button type="button" class="close" id="add-task-close" aria-label="Sluiten">&times;</button>
-      <h2 id="add-task-heading">Taak toevoegen</h2>
-      <form id="staff-add-task-form" class="staff-sheet-form">
-        <label>
-          Titel
-          <input type="text" id="add-task-title-input" name="title" maxlength="120" required autocomplete="off">
-        </label>
-        <label>
-          Locatie
-          <input type="text" id="add-task-location-input" name="location" maxlength="120" autocomplete="off">
-        </label>
-        <label>
-          Beschrijving
-          <textarea id="add-task-description-input" name="description" maxlength="2000" rows="4"></textarea>
-        </label>
-        <label class="file-label">
-          Foto
-          <input type="file" id="add-task-photo" name="photo" accept="image/*">
-        </label>
-        <div id="add-task-photo-preview" class="photo-preview hidden"></div>
-        <p class="assignee-fixed">Toegewezen aan: <strong id="add-task-assignee"></strong></p>
-        <p id="add-task-error" class="form-error hidden"></p>
-        <div class="form-actions">
-          <button type="submit">Toevoegen</button>
-          <button type="button" class="secondary" id="add-task-cancel">Annuleren</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <div id="report-page" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="report-heading">
-    <div class="modal-content sheet-content">
-      <button type="button" class="close" id="report-close" aria-label="Sluiten">&times;</button>
-      <h2 id="report-heading">Fout melden</h2>
-      <form id="report-form" class="staff-sheet-form">
-        <label>
-          Omschrijving
-          <textarea id="report-description" name="description" maxlength="1000" rows="6" required></textarea>
-        </label>
-        <p id="report-count" class="char-count">0 / 1000</p>
-        <label class="file-label">
-          Foto of screenshot
-          <input type="file" id="report-photo" name="photo" accept="image/*">
-        </label>
-        <div id="report-photo-preview" class="photo-preview hidden"></div>
-        <dl class="auto-info">
-          <div><dt>Naam</dt><dd id="report-info-name"></dd></div>
-          <div><dt>Tijd</dt><dd id="report-info-time"></dd></div>
-          <div><dt>App-versie</dt><dd id="report-info-version"></dd></div>
-          <div><dt>Toestel</dt><dd id="report-info-device"></dd></div>
-        </dl>
-        <p id="report-error" class="form-error hidden"></p>
-        <div class="form-actions">
-          <button type="submit">Versturen</button>
-          <button type="button" class="secondary" id="report-cancel">Annuleren</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-
-  <script src="app-version.js?v=16"></script>
-  <script type="module" src="app.js?v=16"></script>
+  <script src="app-version.js?v=17"></script>
+  <script>
+    (function () {
+      if (!("serviceWorker" in navigator)) return;
+      var reloadKey = "zl-sw-reloaded-v17";
+      var reloading = false;
+      navigator.serviceWorker.addEventListener("controllerchange", function () {
+        if (reloading) return;
+        if (sessionStorage.getItem(reloadKey)) return;
+        reloading = true;
+        sessionStorage.setItem(reloadKey, "1");
+        location.reload();
+      });
+      navigator.serviceWorker.register("./sw.js").catch(function () {});
+    })();
+  </script>
 </body>
 </html>
