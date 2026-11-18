@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Build Zeiklijst Admin icons (ZLA) from a single SVG source.
 
-Temporary lettering font: Anton (OFL, condensed bold), until Dirty Suburban
-is available. Re-run with the real font:
+Lettering font is Rubik Distressed (OFL), same as the staff ZL icons.
 
-    FONT_PATH=/path/to/DirtySuburban.ttf python3 admin/icon-src/build-icons.py
+    FONT_PATH=fonts/rubik-distressed.ttf python3 admin/icon-src/build-icons.py
 
-Or drop the font at admin/icon-src/lettering.ttf (or .otf) and run this script.
+Override with FONT_PATH, or drop a font at admin/icon-src/lettering.ttf.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ from fontTools.ttLib import TTFont
 
 ROOT = Path(__file__).resolve().parent
 REPO_ADMIN = ROOT.parent
+REPO_ROOT = REPO_ADMIN.parent
 ICONS = REPO_ADMIN / "icons"
 SVG_PATH = ROOT / "icon.svg"
 
@@ -33,25 +33,23 @@ CANVAS = 512
 BG = "#231F20"
 ORANGE = "#F99D27"
 MAGENTA = "#C40070"
-STRIPE_OPACITY = 0.25
+STRIPE_OPACITY = 0.20
 # Orange:magenta ≈ 2:1, 45° ↗, matching the generic stripe rhythm of the reference.
 STRIPE_ORANGE = 48
 STRIPE_MAGENTA = 24
 STRIPE_PERIOD = STRIPE_ORANGE + STRIPE_MAGENTA
 OUTLINE = "#000000"
-# Visible outline ≈ stroke/2. ~2.2px at 48px icon size.
-STROKE = 38
+# Visible outline ≈ stroke/2. ~12px at 512, matching the staff ZL icons.
+STROKE = 26
 # Content stays inside the maskable safe zone (~80% of the canvas), stroke included.
-TARGET_WIDTH = 330
-TRACKING = 30  # font units between letters
+TARGET_WIDTH = 360
+TRACKING = 20  # font units between letters
 
 FONT_CANDIDATES = [
     os.environ.get("FONT_PATH"),
     str(ROOT / "lettering.ttf"),
     str(ROOT / "lettering.otf"),
-    "/usr/share/fonts/truetype/sand-box/google/Anton/Anton-Regular.ttf",
-    "/usr/share/fonts/truetype/google/anton/Anton-Regular.ttf",
-    "/usr/share/fonts/truetype/Anton-Regular.ttf",
+    str(REPO_ROOT / "fonts" / "rubik-distressed.ttf"),
 ]
 
 SIZES = {
@@ -65,12 +63,16 @@ def resolve_font() -> Path:
     for raw in FONT_CANDIDATES:
         if not raw:
             continue
-        path = Path(raw).expanduser()
-        if path.is_file():
-            return path
+        expanded = Path(raw).expanduser()
+        candidates = [expanded]
+        if not expanded.is_absolute():
+            candidates.extend([Path.cwd() / expanded, REPO_ROOT / expanded])
+        for path in candidates:
+            if path.is_file():
+                return path.resolve()
     sys.stderr.write(
-        "No lettering font found. Set FONT_PATH or place the font at "
-        "admin/icon-src/lettering.ttf\n"
+        "No lettering font found. Set FONT_PATH (e.g. fonts/rubik-distressed.ttf) "
+        "or place a font at admin/icon-src/lettering.ttf\n"
     )
     sys.exit(1)
 
@@ -129,7 +131,10 @@ def build_svg(font_path: Path) -> str:
   </defs>
   <rect width="{CANVAS}" height="{CANVAS}" fill="{BG}"/>
   <rect width="{CANVAS}" height="{CANVAS}" fill="url(#stripes)"/>
-  <path d="{d}" transform="{transform}" fill="{ORANGE}" stroke="{OUTLINE}" stroke-width="{STROKE / scale:.3f}" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"/>
+  <g transform="{transform}">
+    <path d="{d}" fill="{OUTLINE}" stroke="{OUTLINE}" stroke-width="{STROKE / scale:.3f}" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="{d}" fill="{ORANGE}"/>
+  </g>
 </svg>
 """
 

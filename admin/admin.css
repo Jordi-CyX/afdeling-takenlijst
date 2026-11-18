@@ -47,7 +47,7 @@ header .header-inner {
 }
 
 header h1 {
-  font-family: "Rubik Dirt", Impact, "Arial Black", sans-serif;
+  font-family: var(--font-display);
   font-size: 1.15rem;
   flex: 1 1 auto;
   min-width: 0;
