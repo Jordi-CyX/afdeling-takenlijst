@@ -210,6 +210,7 @@ export function normalizeTask(id, data) {
     rejectedCount: Number(d.rejectedCount) || 0,
     rejections: Array.isArray(d.rejections) ? d.rejections : [],
     lastRejectedAt: toIso(d.lastRejectedAt),
+    lastRejectionReason: typeof d.lastRejectionReason === "string" ? d.lastRejectionReason : "",
     location: typeof d.location === "string" ? d.location : ""
   };
 }
