@@ -23,6 +23,7 @@ Open de Admin-app en log in met e-mail en wachtwoord (standaard e-mail: `j.g_vdb
 
 - **Dashboard**: aanklikbare totalen voor open (naar Taken, gefilterd) en pending (naar Controle), de *actuele* open/pending-verdeling per medewerker (inclusief Allen en Niet toegewezen), en een korte lijst van de laatste pending taken. Afgerond blijft als kleiner cijfer staan.
 - Taken **toevoegen** en **bewerken** (titel verplicht; locatie, beschrijving en foto's optioneel, max. 4 gecomprimeerde foto's). Het formulier "Nieuwe taak" staat standaard ingeklapt. Zoeken en filteren kan op status, medewerker, locatie en herhalend.
+- Optionele **streefdatum** bij eenmalige taken. Op kaarten en in de details staat “Streefdatum dd-mm-jjjj”. Is die datum verstreken en de taak nog niet afgerond, dan verschijnt een rood/magenta badge, een dashboardkaart **Streefdatum verstreken** (aantal + lijst) en een filter in Taken.
 - Een bestaande taak **opnieuw toewijzen**
 - Taken **verwijderen**
 - Een afgeronde taak **terugzetten naar open**
