@@ -1,12 +1,9 @@
-// MAINTENANCE LOCKDOWN 2026-11-18
-// Medewerkers-app tijdelijk offline wegens beveiligingsfixes.
-// - Alleen de admin (isAdmin) heeft toegang, zoals voorheen (lezen + schrijven).
-// - Het alleen-lezen account (isReader, zl-assistent-reader) mag tasks en employees lezen.
-// - Al het andere is geweigerd: geen medewerker-login/claim (nameIndex, staffAccounts),
-//   geen pincode-resetverzoeken, geen taak-updates of -aanmaak door medewerkers,
-//   geen meldingen/foto-uploads (reports), geen anonieme reads.
-// Herstel: vorige regels staan in git (commit voor deze lockdown) en in
-// /workspace/outputs/firestore-rules-reader-duedate.txt.
+// STAP 2 (beveiliging) – 2026-11-18
+// - Claimen van een medewerker kan alleen nog met een eenmalige startcode van de admin
+//   (startCodes/{code}, 7 dagen geldig). Naam typen alleen geeft geen toegang meer.
+// - Inactieve medewerkers (active == false) worden geweigerd (isValidStaff).
+// - Een pincode-resetverzoek blijft alleen een verzoek; het geeft geen toegang.
+// - Foto's moeten data:image/(jpeg|png|webp);base64,... zijn.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -22,41 +19,349 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == "2xZjAuMgnYUjMg6Mg4ivPhEOIFr2";
     }
 
+    function employeeDoc(employeeId) {
+      return get(/databases/$(database)/documents/employees/$(employeeId));
+    }
+
+    function employeePinVersion(data) {
+      return ("pinVersion" in data && data.pinVersion is int) ? data.pinVersion : 0;
+    }
+
+    function staffAccountPath() {
+      return /databases/$(database)/documents/staffAccounts/$(request.auth.uid);
+    }
+
+    function staffAccount() {
+      return get(staffAccountPath()).data;
+    }
+
+    function staffEmployeeId() {
+      return staffAccount().employeeId;
+    }
+
+    function staffEmployee() {
+      return employeeDoc(staffEmployeeId()).data;
+    }
+
+    function isActiveEmployee(data) {
+      return data.get("active", true) != false;
+    }
+
+    function isValidStaff() {
+      return isSignedIn()
+        && exists(staffAccountPath())
+        && staffAccount().employeeId is string
+        && exists(/databases/$(database)/documents/employees/$(staffEmployeeId()))
+        && isActiveEmployee(staffEmployee())
+        && employeePinVersion(staffEmployee()) == staffAccount().pinVersion;
+    }
+
+    // Startcode: 10 tekens uit A-Z en 2-9 zonder 0, O, 1, I en L (doc id = code, hoofdletters).
+    function isStartCodeFormat(code) {
+      return code is string && code.matches("^[A-HJKMNP-Z2-9]{10}$");
+    }
+
+    function startCodePath(code) {
+      return /databases/$(database)/documents/startCodes/$(code);
+    }
+
+    function expectedStartCodeEmail(employeeId, pinVersion, code) {
+      return ("emp-" + employeeId + "-v" + string(pinVersion) + "-" + code.lower() + "@zeiklijst.app").lower();
+    }
+
+    function tokenEmailIs(expected) {
+      return request.auth.token.email is string
+        && request.auth.token.email.lower() == expected;
+    }
+
+    // Alleen veilige foto's: data:image/(jpeg|png|webp);base64,...
+    function isSafePhoto(p, maxSize) {
+      return p is string
+        && p.size() <= maxSize
+        && p.matches("^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$");
+    }
+
+    function isActiveTemplate(tpl) {
+      return !("paused" in tpl) || tpl.paused == false;
+    }
+
+    function templateMatches(task, tpl) {
+      return task.title == tpl.title
+        && task.description == tpl.description
+        && task.assigneeId == (("assigneeId" in tpl) ? tpl.assigneeId : "")
+        && task.assigneeName == (("assigneeName" in tpl) ? tpl.assigneeName : "")
+        && (("location" in task) ? task.location : "") == (("location" in tpl) ? tpl.location : "")
+        && task.photos == (("photos" in tpl) ? tpl.photos : []);
+    }
+
+    function isValidOccurrenceId(taskId, data) {
+      return data.recurringId is string
+        && data.occurrenceDate is string
+        && data.occurrenceDate.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+        && taskId == data.recurringId + "_" + data.occurrenceDate;
+    }
+
+    function hasAllowedTaskKeys(data) {
+      return data.keys().hasOnly([
+        "title",
+        "description",
+        "assigneeId",
+        "assigneeName",
+        "status",
+        "createdAt",
+        "pendingAt",
+        "pendingBy",
+        "completedAt",
+        "recurringId",
+        "occurrenceDate",
+        "photos",
+        "location"
+      ]);
+    }
+
+    function isValidRecurringInstance(taskId) {
+      let data = request.resource.data;
+      let recId = data.recurringId;
+      let recPath = /databases/$(database)/documents/recurring/$(recId);
+      return isValidOccurrenceId(taskId, data)
+        && hasAllowedTaskKeys(data)
+        && data.status == "open"
+        && data.title is string
+        && data.description is string
+        && data.assigneeId is string
+        && data.assigneeName is string
+        && data.createdAt is string
+        && (!("pendingAt" in data) || data.pendingAt == null)
+        && (!("pendingBy" in data) || data.pendingBy == null)
+        && (!("completedAt" in data) || data.completedAt == null)
+        && data.photos is list
+        && data.photos.size() <= 4
+        && (!("location" in data) || data.location is string)
+        && exists(recPath)
+        && isActiveTemplate(get(recPath).data)
+        && templateMatches(data, get(recPath).data);
+    }
+
+    function pendingByEmployeeIdCleared() {
+      return !("pendingByEmployeeId" in request.resource.data)
+        || request.resource.data.pendingByEmployeeId == null;
+    }
+
+    function pendingByEmployeeIdOk() {
+      return pendingByEmployeeIdCleared()
+        || request.resource.data.pendingByEmployeeId == staffEmployeeId();
+    }
+
+    function isStatusToggle() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["status", "pendingAt", "pendingBy", "pendingByEmployeeId"])
+        && (
+          (
+            resource.data.status == "open"
+            && request.resource.data.status == "pending"
+            && request.resource.data.pendingAt is string
+            && request.resource.data.pendingBy == staffEmployee().name
+            && pendingByEmployeeIdOk()
+          )
+          || (
+            resource.data.status == "pending"
+            && request.resource.data.status == "open"
+            && request.resource.data.pendingAt == null
+            && request.resource.data.pendingBy == null
+            && pendingByEmployeeIdCleared()
+          )
+        );
+    }
+
+    function isNullOrMissing(data, key) {
+      return !(key in data) || data[key] == null;
+    }
+
+    function isValidStaffTaskCreate() {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          "title",
+          "description",
+          "location",
+          "assigneeId",
+          "assigneeName",
+          "status",
+          "createdAt",
+          "photos",
+          "createdByRole",
+          "createdByEmployeeId",
+          "createdByName",
+          "adminReview",
+          "recurringId",
+          "occurrenceDate",
+          "pendingAt",
+          "pendingBy",
+          "completedAt"
+        ])
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 120
+        && (!("description" in data) || (data.description is string && data.description.size() <= 2000))
+        && (!("location" in data) || (data.location is string && data.location.size() <= 120))
+        && data.assigneeId == staffEmployeeId()
+        && data.assigneeName == staffEmployee().name
+        && data.status == "open"
+        && data.createdAt is string
+        && data.createdAt.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+\\-][0-9]{2}:[0-9]{2})$")
+        && (!("photos" in data) || (
+          data.photos is list
+          && data.photos.size() <= 1
+          && (data.photos.size() == 0 || isSafePhoto(data.photos[0], 716800))
+        ))
+        && data.createdByRole == "staff"
+        && data.createdByEmployeeId == staffEmployeeId()
+        && data.createdByName == staffEmployee().name
+        && data.adminReview == "nieuw"
+        && isNullOrMissing(data, "recurringId")
+        && isNullOrMissing(data, "occurrenceDate")
+        && isNullOrMissing(data, "pendingAt")
+        && isNullOrMissing(data, "pendingBy")
+        && isNullOrMissing(data, "completedAt");
+    }
+
     match /tasks/{taskId} {
-      allow read: if isAdmin() || isReader();
-      allow create, update, delete: if isAdmin();
+      allow read: if isAdmin() || isValidStaff() || isReader();
+      allow create: if isAdmin()
+        || (isValidStaff() && isValidRecurringInstance(taskId))
+        || (isValidStaff() && isValidStaffTaskCreate());
+      allow update: if isAdmin() || (isValidStaff() && isStatusToggle());
+      allow delete: if isAdmin();
     }
 
     match /recurring/{recurringId} {
-      allow read: if isAdmin();
+      allow read: if isAdmin() || isValidStaff();
       allow create, update, delete: if isAdmin();
     }
 
     match /employees/{employeeId} {
-      allow read: if isAdmin() || isReader();
+      allow read: if isAdmin() || isValidStaff() || isReader();
       allow create, update, delete: if isAdmin();
     }
 
     match /nameIndex/{nameKey} {
-      allow get, list: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || isStaffNameIndexClaim();
+    }
+
+    // Stap 3 van de claim-batch: {hasPin:true, loginKey: code.lower()}.
+    // Alleen toegestaan als dezelfde batch een geldig staffAccounts/{uid} met die startcode aanmaakt.
+    function isStaffNameIndexClaim() {
+      let after = getAfter(staffAccountPath()).data;
+      return isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["hasPin", "loginKey"])
+        && resource.data.hasPin == false
+        && request.resource.data.hasPin == true
+        && resource.data.employeeId is string
+        && resource.data.pinVersion is int
+        && existsAfter(staffAccountPath())
+        && isStartCodeFormat(after.startCode)
+        && after.employeeId == resource.data.employeeId
+        && after.pinVersion == resource.data.pinVersion
+        && request.resource.data.loginKey == after.startCode.lower();
     }
 
     match /staffAccounts/{uid} {
-      allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == uid);
+      allow create: if isAdmin() || isValidStaffAccountCreate(uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // Stap 1 van de claim-batch: staffAccounts/{uid} = {employeeId, pinVersion, startCode}.
+    function isValidStaffAccountCreate(uid) {
+      let data = request.resource.data;
+      return isSignedIn()
+        && request.auth.uid == uid
+        && data.keys().hasOnly(["employeeId", "pinVersion", "startCode"])
+        && data.employeeId is string
+        && data.pinVersion is int
+        && isStartCodeFormat(data.startCode)
+        && exists(startCodePath(data.startCode))
+        && get(startCodePath(data.startCode)).data.used == false
+        && get(startCodePath(data.startCode)).data.expiresAt > request.time
+        && get(startCodePath(data.startCode)).data.employeeId == data.employeeId
+        && get(startCodePath(data.startCode)).data.pinVersion == data.pinVersion
+        && exists(/databases/$(database)/documents/employees/$(data.employeeId))
+        && isActiveEmployee(employeeDoc(data.employeeId).data)
+        && employeePinVersion(employeeDoc(data.employeeId).data) == data.pinVersion
+        && tokenEmailIs(expectedStartCodeEmail(data.employeeId, data.pinVersion, data.startCode))
+        && getAfter(startCodePath(data.startCode)).data.used == true
+        && getAfter(startCodePath(data.startCode)).data.usedBy == uid;
+    }
+
+    match /startCodes/{code} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || isStartCodeClaim(code);
+    }
+
+    // Stap 2 van de claim-batch: {used:true, usedBy: uid, usedAt: request.time}.
+    function isStartCodeClaim(code) {
+      let after = getAfter(staffAccountPath()).data;
+      return isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["used", "usedBy", "usedAt"])
+        && resource.data.used == false
+        && resource.data.expiresAt > request.time
+        && request.resource.data.used == true
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.usedAt == request.time
+        && existsAfter(staffAccountPath())
+        && after.startCode == code
+        && after.employeeId == resource.data.employeeId
+        && after.pinVersion == resource.data.pinVersion;
     }
 
     match /pinResetRequests/{employeeId} {
-      allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow read, delete: if isAdmin();
+      allow create: if isSignedIn() && isValidPinResetCreate(employeeId);
+      allow update: if isSignedIn() && isValidPinResetCreate(employeeId);
+    }
+
+    function isValidPinResetCreate(employeeId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly(["employeeId", "name", "requestedAt"])
+        && data.employeeId == employeeId
+        && data.name is string
+        && data.requestedAt == request.time
+        && exists(/databases/$(database)/documents/employees/$(employeeId));
+    }
+
+    function isValidReportCreate() {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          "description",
+          "photo",
+          "employeeId",
+          "employeeName",
+          "createdAt",
+          "appVersion",
+          "device",
+          "status"
+        ])
+        && data.description is string
+        && data.description.size() >= 1
+        && data.description.size() <= 1000
+        && (!("photo" in data) || isSafePhoto(data.photo, 700000))
+        && data.employeeId == staffEmployeeId()
+        && data.employeeName == staffEmployee().name
+        && data.createdAt == request.time
+        && data.appVersion is string
+        && data.appVersion.size() <= 40
+        && data.device is string
+        && data.device.size() <= 300
+        && data.status == "nieuw";
     }
 
     match /reports/{reportId} {
-      allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow read, update, delete: if isAdmin();
+      allow create: if isValidStaff() && isValidReportCreate();
     }
-
-    // Alles wat hierboven niet genoemd is: standaard geweigerd.
   }
 }
