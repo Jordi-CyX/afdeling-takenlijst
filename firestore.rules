@@ -9,6 +9,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == "Of3mAU2qJeczN6NDUfkgT73kfJn1";
     }
 
+    function isReader() {
+      return isSignedIn() && request.auth.uid == "2xZjAuMgnYUjMg6Mg4ivPhEOIFr2";
+    }
+
     function employeeDoc(employeeId) {
       return get(/databases/$(database)/documents/employees/$(employeeId));
     }
@@ -185,7 +189,7 @@ service cloud.firestore {
     }
 
     match /tasks/{taskId} {
-      allow read: if isAdmin() || isValidStaff();
+      allow read: if isAdmin() || isValidStaff() || isReader();
       allow create: if isAdmin()
         || (isValidStaff() && isValidRecurringInstance(taskId))
         || (isValidStaff() && isValidStaffTaskCreate());
@@ -199,7 +203,7 @@ service cloud.firestore {
     }
 
     match /employees/{employeeId} {
-      allow read: if isAdmin() || isValidStaff();
+      allow read: if isAdmin() || isValidStaff() || isReader();
       allow create, update, delete: if isAdmin();
     }
 
