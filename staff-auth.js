@@ -18,8 +18,6 @@ import {
 import {
   db,
   doc,
-  addDoc,
-  collection,
   writeBatch,
   staffPassword,
   startCodeEmail,
@@ -27,6 +25,7 @@ import {
   formatStartCode,
   isValidStartCode
 } from "./shared.js";
+import { sendResetRequest } from "./limits.js";
 
 // Login model: ZLA contract zla-step3-status.md (audit H1/M1/M2).
 // - Claim (first time, new device, after reset): ONLY the start code.
@@ -47,13 +46,12 @@ const LEGACY_KEYS = [
   "zeiklijst-staff-login-key"
 ];
 const STORAGE_PIN_FAILS = "zeiklijst-staff-pin-fails";
-const STORAGE_LAST_RESET = "zeiklijst-staff-last-reset";
+const LEGACY_RESET_KEY = "zeiklijst-staff-last-reset"; // replaced by server pinResetLimits (step 4)
 
 const PIN_LENGTH = 6;
 const MAX_PIN_FAILS = 5;
 const RESET_NAME_MAX = 60;
 const RESET_NOTE_MAX = 200;
-const RESET_COOLDOWN_MS = 10 * 60 * 1000;
 
 const MSG_INACTIVE = "Je account is niet actief. Neem contact op met je leidinggevende.";
 const MSG_NEEDS_CODE = "Vraag je leidinggevende om een nieuwe startcode.";
@@ -62,6 +60,7 @@ const MSG_CODE_BAD = "Code onbekend, al gebruikt of verlopen. Vraag je leidingge
 const MSG_ACCESS_GONE = "Je pincode is gereset of je toegang is veranderd. " + MSG_NEEDS_CODE;
 const MSG_LOCKED = "Te vaak een onjuiste pincode. " + MSG_NEEDS_CODE;
 const MSG_RESET_SENT = "Verzoek verstuurd. Je leidinggevende geeft je persoonlijk een nieuwe startcode.";
+const MSG_RESET_SENT_AGAIN = "Je verzoek is al verstuurd. Je leidinggevende geeft je persoonlijk een nieuwe startcode.";
 const MSG_OFFLINE = "Geen verbinding. Probeer het opnieuw als je weer online bent.";
 
 let currentStaff = null;
@@ -611,7 +610,7 @@ async function onPinSubmit(event) {
 }
 
 // --- Forgot PIN (contract §4) ---------------------------------------------
-// Only notifies the admin; gives no access. Random id (addDoc), create-only.
+// Only notifies the admin; gives no access. Auto id, create-only, in a batch with pinResetLimits (step 4 §2c).
 
 async function onResetSubmit(event) {
   event.preventDefault();
@@ -633,23 +632,24 @@ async function onResetSubmit(event) {
     setText("staff-reset-error", `De toelichting mag maximaal ${RESET_NOTE_MAX} tekens zijn.`);
     return;
   }
-  const last = Number(localStorage.getItem(STORAGE_LAST_RESET)) || 0;
-  if (Date.now() - last < RESET_COOLDOWN_MS) {
-    setText("staff-reset-notice", `Je verzoek is al verstuurd. ${MSG_RESET_SENT.replace("Verzoek verstuurd. ", "")}`);
-    return;
-  }
+  localStorage.removeItem(LEGACY_RESET_KEY);
   setBusy(form, true);
   let sent = false;
   try {
-    await ensureAnonymous();
+    const user = await ensureAnonymous();
     const payload = { name, requestedAt: serverTimestamp() };
     if (note) payload.note = note;
-    await addDoc(collection(db, "pinResetRequests"), payload);
-    localStorage.setItem(STORAGE_LAST_RESET, String(Date.now()));
+    // Contract step 4 §2c: request + pinResetLimits/{uid} + pinResetLimits/_global in one batch.
+    await sendResetRequest(user.uid, payload, (msg) => setText("staff-reset-notice", msg));
     sent = true;
     setText("staff-reset-notice", MSG_RESET_SENT);
     hooks.showToast(MSG_RESET_SENT, "success");
   } catch (err) {
+    if (err && err.isLimit) {
+      setText("staff-reset-notice", "");
+      setText(err.message === MSG_RESET_SENT_AGAIN ? "staff-reset-notice" : "staff-reset-error", err.message);
+      return;
+    }
     const message = genericError(err, "Versturen");
     setText("staff-reset-error", message);
     hooks.showToast(message, "error");

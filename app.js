@@ -1,8 +1,6 @@
 import {
   db,
   doc,
-  addDoc,
-  collection,
   updateDoc,
   listenCollection,
   generateDueInstances,
@@ -23,6 +21,7 @@ import {
   logoutStaff,
   setStaffDisplayName
 } from "./staff-auth.js";
+import { sendWithStaffCounter } from "./limits.js";
 
 let tasks = [];
 let templates = [];
@@ -48,12 +47,9 @@ const APP_VERSION_MAX = 40;
 const PHOTO_MAX_CHARS = 250000;          // data-URL length, ~180 KB of JPEG
 const PHOTO_FILE_MAX_BYTES = 25 * 1024 * 1024; // refuse huge files before decoding
 const PHOTO_ACCEPT = /^image\/(jpeg|png|webp|heic|heif|gif|bmp)$/i;
-const OWN_TASKS_PER_DAY = 10;
-const REPORTS_PER_DAY = 5;
-const SUBMIT_COOLDOWN_MS = 15000;
 const TOGGLE_COOLDOWN_MS = 1500;
-const REPORT_COUNT_KEY = "zeiklijst-report-count";
-const LAST_SUBMIT_KEY = "zeiklijst-last-submit";
+// Daily limits + 15 s cooldown are enforced by the server counters (limits.js, contract step 4).
+const LEGACY_LIMIT_KEYS = ["zeiklijst-report-count", "zeiklijst-last-submit"];
 
 // Field names for staff-created tasks and reports. Must match ZLA's rules exactly.
 const STAFF_TASK = {
@@ -764,48 +760,10 @@ function checkPhotoDataUrl(dataUrl) {
   return dataUrl;
 }
 
-// M3: rate / double-submit guards (client side; the rules are the real limit).
+// Double-submit guard (in-flight). Daily limits and the 15 s cooldown come from
+// the server counter staffDailyCounters/{employeeId} (limits.js).
 let submitBusy = false;
-
-function dayKey() {
-  return localDateKey(new Date());
-}
-
-function lastSubmitAt() {
-  return Number(localStorage.getItem(LAST_SUBMIT_KEY)) || 0;
-}
-
-function cooldownMessage() {
-  const wait = SUBMIT_COOLDOWN_MS - (Date.now() - lastSubmitAt());
-  if (wait <= 0) return "";
-  return `Even wachten, je kunt over ${Math.ceil(wait / 1000)} seconden weer iets versturen.`;
-}
-
-function markSubmitted() {
-  localStorage.setItem(LAST_SUBMIT_KEY, String(Date.now()));
-}
-
-function ownTasksToday(employeeId) {
-  const today = dayKey();
-  return tasks.filter((t) => t.createdByRole === "staff"
-    && t.createdByEmployeeId === employeeId
-    && t.createdAt
-    && localDateKey(new Date(t.createdAt)) === today).length;
-}
-
-function reportCount(employeeId) {
-  try {
-    const data = JSON.parse(localStorage.getItem(REPORT_COUNT_KEY) || "{}");
-    return data && data.day === dayKey() && data.employeeId === employeeId ? Number(data.count) || 0 : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function bumpReportCount(employeeId) {
-  const count = reportCount(employeeId) + 1;
-  localStorage.setItem(REPORT_COUNT_KEY, JSON.stringify({ day: dayKey(), employeeId, count }));
-}
+LEGACY_LIMIT_KEYS.forEach((k) => { try { localStorage.removeItem(k); } catch { /* ignore */ } });
 
 async function compressPhoto(file, maxChars = PHOTO_MAX_CHARS) {
   checkPhotoFile(file);
@@ -926,6 +884,7 @@ function openReportPage() {
 }
 
 function writeFormError(err, permissionText, fallback) {
+  if (err && err.isLimit) return err.message;
   if (isPermissionDenied(err)) return permissionText;
   if (/te groot|geldige foto|Even wachten|maximaal/i.test(String((err && err.message) || err || ""))) {
     return err.message;
@@ -973,15 +932,6 @@ async function onAddTaskSubmit(event) {
     return;
   }
   if (submitBusy) return;
-  const wait = cooldownMessage();
-  if (wait) {
-    setFormError("add-task-error", wait);
-    return;
-  }
-  if (ownTasksToday(staff.employeeId) >= OWN_TASKS_PER_DAY) {
-    setFormError("add-task-error", `Je kunt maximaal ${OWN_TASKS_PER_DAY} eigen taken per dag toevoegen.`);
-    return;
-  }
   const form = document.getElementById("staff-add-task-form");
   const fileInput = document.getElementById("add-task-photo");
   const file = fileInput && fileInput.files && fileInput.files[0];
@@ -1012,8 +962,7 @@ async function onAddTaskSubmit(event) {
       [F.adminReview]: "nieuw"
     };
     delete payload.dueDate;
-    await addDoc(collection(db, "tasks"), payload);
-    markSubmitted();
+    await sendWithStaffCounter("task", payload, staff.employeeId, (msg) => setFormError("add-task-error", msg));
     closePage("add-task-page");
     showToast("Taak toegevoegd.", "success");
   } catch (err) {
@@ -1047,15 +996,6 @@ async function onReportSubmit(event) {
     return;
   }
   if (submitBusy) return;
-  const wait = cooldownMessage();
-  if (wait) {
-    setFormError("report-error", wait);
-    return;
-  }
-  if (reportCount(staff.employeeId) >= REPORTS_PER_DAY) {
-    setFormError("report-error", `Je kunt maximaal ${REPORTS_PER_DAY} meldingen per dag versturen.`);
-    return;
-  }
   const form = document.getElementById("report-form");
   const fileInput = document.getElementById("report-photo");
   const file = fileInput && fileInput.files && fileInput.files[0];
@@ -1077,9 +1017,7 @@ async function onReportSubmit(event) {
       const dataUrl = await compressPhoto(file);
       if (dataUrl) payload[F.photo] = dataUrl;
     }
-    await addDoc(collection(db, "reports"), payload);
-    markSubmitted();
-    bumpReportCount(staff.employeeId);
+    await sendWithStaffCounter("report", payload, staff.employeeId, (msg) => setFormError("report-error", msg));
     closePage("report-page");
     showToast("Bedankt, je melding is verstuurd", "success");
   } catch (err) {

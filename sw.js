@@ -9,6 +9,7 @@ const ASSETS = [
   "./app.js",
   "./app-version.js",
   "./staff-auth.js",
+  "./limits.js",
   "./shared.js",
   "./firebase-init.js",
   "./manifest.webmanifest",
