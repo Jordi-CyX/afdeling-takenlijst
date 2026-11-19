@@ -1186,3 +1186,4 @@ details.fold:not([open]) > .fold-summary::after { content: "▸ Uitklappen"; }
 .app-version { font-size: 0.75rem; color: #E8E6E3; letter-spacing: 0.02em; }
 body.print-mode .app-version-bar { display: none; }
 @media print { .app-version-bar { display: none; } }
+#data-v2 .form-actions + .section-intro { margin-top: 0.75rem; }
