@@ -212,10 +212,12 @@
           Beschrijving
           <textarea id="add-task-description-input" name="description" maxlength="2000" rows="4"></textarea>
         </label>
-        <label class="file-label">
-          Foto
-          <input type="file" id="add-task-photo" name="photo" accept="image/jpeg,image/png,image/webp,image/heic,image/heif">
-        </label>
+        <div class="file-picker">
+          <span class="file-picker-caption">Foto</span>
+          <input type="file" id="add-task-photo" name="photo" class="file-picker-input" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" aria-describedby="add-task-photo-name">
+          <label for="add-task-photo" class="file-picker-button">Foto kiezen</label>
+          <span id="add-task-photo-name" class="file-picker-name">Geen foto gekozen</span>
+        </div>
         <div id="add-task-photo-preview" class="photo-preview hidden"></div>
         <fieldset class="assignee-choice">
           <legend>Toegewezen aan</legend>
@@ -243,10 +245,12 @@
           <textarea id="report-description" name="description" maxlength="1000" rows="6" required></textarea>
         </label>
         <p id="report-count" class="char-count">0 / 1000</p>
-        <label class="file-label">
-          Foto of screenshot
-          <input type="file" id="report-photo" name="photo" accept="image/jpeg,image/png,image/webp,image/heic,image/heif">
-        </label>
+        <div class="file-picker">
+          <span class="file-picker-caption">Foto of screenshot</span>
+          <input type="file" id="report-photo" name="photo" class="file-picker-input" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" aria-describedby="report-photo-name">
+          <label for="report-photo" class="file-picker-button">Foto kiezen</label>
+          <span id="report-photo-name" class="file-picker-name">Geen foto gekozen</span>
+        </div>
         <div id="report-photo-preview" class="photo-preview hidden"></div>
         <dl class="auto-info">
           <div><dt>Naam</dt><dd id="report-info-name"></dd></div>

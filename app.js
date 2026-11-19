@@ -367,7 +367,12 @@ function startListeners() {
       fillLocationSelect();
       fillLocationFilter();
       renderTasks();
-      if (!isPermissionDenied(err)) onListenerError(err);
+      if (currentTaskId) openTask(currentTaskId);
+      if (isPermissionDenied(err)) {
+        console.warn("settings/locations-listener geweigerd; lijst niet beschikbaar, app blijft ingelogd.", err);
+        return;
+      }
+      onListenerError(err);
     }));
     const completionsQuery = query(
       collection(db, "taskCompletions"),
@@ -378,7 +383,15 @@ function startListeners() {
       (snap.docs || []).forEach((item) => { next[item.id] = item.data() || {}; });
       ownCompletions = next;
       if (currentTaskId) openTask(currentTaskId);
-    }, onListenerError));
+    }, (err) => {
+      ownCompletions = {};
+      if (currentTaskId) openTask(currentTaskId);
+      if (isPermissionDenied(err)) {
+        console.warn("taskCompletions-listener geweigerd; app blijft ingelogd.", err);
+        return;
+      }
+      onListenerError(err);
+    }));
     unsubscribers.push(onSnapshot(doc(db, "employees", staff.employeeId), (snap) => {
       if (!snap.exists()) {
         onListenerError({ code: "permission-denied" });
@@ -847,8 +860,8 @@ function showToast(text, type) {
   }, 4000);
 }
 
-// L2: staff may only tick/untick their own, "Allen" or unassigned tasks
-// (same condition ZLA's isStatusToggle enforces).
+// L2: staff may only tick/untick their own or Allen tasks
+// (same condition ZLA's isStatusToggle enforces; empty assigneeId counts as Allen).
 function canToggle(task) {
   const staff = getCurrentStaff();
   if (!staff || !task) return false;
@@ -1024,9 +1037,26 @@ async function compressPhoto(file, maxChars = PHOTO_MAX_CHARS) {
   return checkPhotoDataUrl(dataUrl);
 }
 
+function filePickerNameEl(input) {
+  const id = input && input.getAttribute("aria-describedby");
+  return id ? document.getElementById(id) : null;
+}
+
+function setFilePickerName(input, text) {
+  const nameEl = filePickerNameEl(input);
+  if (nameEl) nameEl.textContent = text;
+}
+
+function resetFilePicker(input) {
+  if (!input) return;
+  input.value = "";
+  setFilePickerName(input, "Geen foto gekozen");
+}
+
 function bindPhotoPreview(input, preview) {
   input.addEventListener("change", () => {
     const file = input.files && input.files[0];
+    setFilePickerName(input, file ? file.name : "Geen foto gekozen");
     if (!file) {
       preview.replaceChildren();
       preview.classList.add("hidden");
@@ -1042,7 +1072,7 @@ function bindPhotoPreview(input, preview) {
     preview.classList.remove("hidden");
     remove.addEventListener("click", () => {
       URL.revokeObjectURL(url);
-      input.value = "";
+      resetFilePicker(input);
       preview.replaceChildren();
       preview.classList.add("hidden");
     });
@@ -1110,6 +1140,7 @@ function openAddTaskPage() {
   closePage("report-page");
   const form = document.getElementById("staff-add-task-form");
   if (form) form.reset();
+  resetFilePicker(document.getElementById("add-task-photo"));
   const preview = document.getElementById("add-task-photo-preview");
   if (preview) {
     preview.replaceChildren();
@@ -1143,6 +1174,7 @@ function openReportPage() {
   closePage("add-task-page");
   const form = document.getElementById("report-form");
   if (form) form.reset();
+  resetFilePicker(document.getElementById("report-photo"));
   const preview = document.getElementById("report-photo-preview");
   if (preview) {
     preview.replaceChildren();
