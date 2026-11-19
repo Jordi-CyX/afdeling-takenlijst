@@ -458,6 +458,25 @@ await t("v2-done", "ZL-2: eigenaar wist eigen legacy-completion (at null) bij te
 await t("v2-done", "ZL-2: collega wist andermans legacy-completion faalt", async () => { await seedDoc("tasks/t-leg", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [] }); await seedDoc("taskCompletions/t-leg", { employeeId: "emp-aart", name: "Aart", at: null, legacy: true }); await assertFails(untickB(S2(), "t-leg")); });
 await t("v2-done", "ZL-2: eigen legacy-completion lezen (query) slaagt", async () => { await seedDoc("taskCompletions/t-leg", { employeeId: "emp-aart", name: "Aart", at: null, legacy: true }); await assertSucceeds(staffCtx("u-aart").collection("taskCompletions").where("employeeId", "==", "emp-aart").get()); });
 
+// zl-vorm: exact dezelfde batches als origin/zl-build-v2 (app.js markPending/unmarkPending/onAddTaskSubmit, d218a85)
+const DEL = () => firebase.firestore.FieldValue.delete();
+const zlTick = (db, id, emp = "emp-staff", name = "Staff") => { const b = db.batch(); b.update(db.doc(`tasks/${id}`), { status: "pending", pendingAt: DEL(), pendingBy: DEL(), pendingByEmployeeId: DEL() }); b.set(db.doc(`taskCompletions/${id}`), { employeeId: emp, name, at: ST() }); return b.commit(); };
+const zlUntickOwn = (db, id) => { const b = db.batch(); b.update(db.doc(`tasks/${id}`), { status: "open" }); b.delete(db.doc(`taskCompletions/${id}`)); return b.commit(); };
+const zlUntickLegacy = (db, id) => db.doc(`tasks/${id}`).update({ status: "open", pendingAt: DEL(), pendingBy: DEL(), pendingByEmployeeId: DEL() });
+const zlCreate = (over = {}) => ({ title: "Lamp kapot", description: "", location: "Pad 16", locationId: "pad-16", assigneeId: "emp-staff", assigneeName: "Staff", status: "open", createdAt: iso(), photos: [], createdByRole: "staff", createdByEmployeeId: "emp-staff", createdByName: "Staff", adminReview: "nieuw", ...over });
+await t("zl-vorm", "ZL-taak aanmaken (13 velden, met teller) slaagt", async () => { if (Object.keys(zlCreate()).length !== 13) throw new Error("niet 13 velden"); await assertSucceeds(addTask(S2(), zlCreate())); });
+await t("zl-vorm", "ZL-taak met inactieve locatie faalt", () => assertFails(addTask(S2(), zlCreate({ location: "Oud pad", locationId: "oud-pad" }))));
+await t("zl-vorm", "ZL-taak zonder locationId (oude app) faalt", () => { const d = zlCreate(); delete d.locationId; return assertFails(addTask(S2(), d)); });
+await t("zl-vorm", "ZL-afvinken (deleteField op ontbrekende velden + completion) slaagt", () => assertSucceeds(zlTick(S2(), "t-allen")));
+await t("zl-vorm", "ZL-afvinken ruimt achtergebleven oude pending-velden op en slaagt", async () => { await seedDoc("tasks/t-rest", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(-1), photos: [], pendingAt: null, pendingBy: null, pendingByEmployeeId: null }); await assertSucceeds(zlTick(S2(), "t-rest")); });
+await t("zl-vorm", "ZL-afvinken met andere naam dan employees-doc faalt", () => assertFails(zlTick(S2(), "t-allen", "emp-staff", "Iemand anders")));
+await t("zl-vorm", "ZL-terugzetten met eigen completion slaagt", async () => { await assertSucceeds(zlTick(S2(), "t-allen")); await assertSucceeds(zlUntickOwn(S2(), "t-allen")); });
+await t("zl-vorm", "ZL-terugzetten oude afvinking zonder completion (eigen) slaagt", () => assertSucceeds(zlUntickLegacy(staffCtx("u-aart"), "t-pending-aart")));
+await t("zl-vorm", "ZL-terugzetten oude afvinking zonder completion (collega) faalt", () => assertFails(zlUntickLegacy(S2(), "t-pending-aart")));
+await t("zl-vorm", "ZL-terugzetten na migratie door collega faalt (completion van Aart bestaat)", async () => { await seedDoc("tasks/t-mig", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [] }); await seedDoc("taskCompletions/t-mig", { employeeId: "emp-aart", name: "Aart", at: TS.now(), legacy: true }); await assertFails(zlUntickLegacy(S2(), "t-mig")); });
+await t("zl-vorm", "ZL-terugzetten na migratie door eigenaar (eigen doc via query) slaagt", async () => { await seedDoc("tasks/t-mig", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [] }); await seedDoc("taskCompletions/t-mig", { employeeId: "emp-aart", name: "Aart", at: TS.now(), legacy: true }); await assertSucceeds(zlUntickOwn(staffCtx("u-aart"), "t-mig")); });
+await t("zl-vorm", "ZL-query eigen completions slaagt, zonder filter faalt", async () => { await assertSucceeds(S2().collection("taskCompletions").where("employeeId", "==", "emp-staff").get()); await assertFails(S2().collection("taskCompletions").get()); });
+
 // vragenlijst
 await t("v2-cfg", "admin: vragenlijst opslaan slaagt", () => assertSucceeds(A().doc("auditConfig/current").set(cfg())));
 await t("v2-cfg", "admin: vragenlijst met version 0 faalt", () => assertFails(A().doc("auditConfig/current").set(cfg({ version: 0 }))));
