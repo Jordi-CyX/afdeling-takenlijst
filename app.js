@@ -38,6 +38,8 @@ let toastTimer = 0;
 const VIEW_KEY = "zeiklijst-view";
 const FILTER_KEY = "zeiklijst-filter";
 const LOCATION_FILTER_KEY = "zeiklijst-location-filter";
+const LOCATION_NONE_FILTER = "__none__";
+const LOCATION_NONE_FILTER_LEGACY = "other";
 const FILTERS = new Set(["all", "mine", "allen", "pending"]);
 const LOCATION_UNSET_MSG = "Locatielijst nog niet ingesteld, vraag de beheerder";
 
@@ -109,22 +111,47 @@ function locationItems() {
     .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
 }
 
+function locationLabelsMap() {
+  const labels = locationSettings && locationSettings.labels && typeof locationSettings.labels === "object"
+    ? locationSettings.labels
+    : {};
+  return labels;
+}
+
 function activeLocationItems() {
   return locationItems().filter((item) => item.active !== false);
 }
 
+function isStaffSelectableItem(item) {
+  return Boolean(item && item.id && item.active !== false && item.staffSelectable !== false);
+}
+
+// Add-task choices: active + staffSelectable (missing staffSelectable = true),
+// or an id that appears in settings.locations.labels.
+function staffSelectableLocationItems() {
+  const items = locationItems().filter(isStaffSelectableItem);
+  const seen = new Set(items.map((item) => item.id));
+  Object.keys(locationLabelsMap()).forEach((id) => {
+    if (!id || seen.has(id)) return;
+    const existing = locationItems().find((item) => item.id === id);
+    if (existing && (existing.active === false || existing.staffSelectable === false)) return;
+    items.push(existing || { id, label: String(locationLabelsMap()[id]), order: Number.MAX_SAFE_INTEGER });
+    seen.add(id);
+  });
+  return items.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+}
+
 function locationsReady() {
-  return activeLocationItems().length > 0;
+  return staffSelectableLocationItems().length > 0;
 }
 
 function locationLabelById(id) {
   if (!id) return "";
   const hit = locationItems().find((item) => item.id === id);
   if (hit && hit.label) return String(hit.label);
-  const labels = locationSettings && locationSettings.labels && typeof locationSettings.labels === "object"
-    ? locationSettings.labels
-    : {};
-  return labels[id] ? String(labels[id]) : "";
+  const labels = locationLabelsMap();
+  if (labels[id]) return String(labels[id]);
+  return id === "overig" ? "Overig" : "";
 }
 
 function taskLocationText(task) {
@@ -149,8 +176,16 @@ function auditOriginText(task) {
   return ["Audit", date, loc].filter(Boolean).join(" · ");
 }
 
+function migrateLocationFilterValue(value) {
+  return value === LOCATION_NONE_FILTER_LEGACY ? LOCATION_NONE_FILTER : (value || "all");
+}
+
 function currentLocationFilter() {
-  const value = localStorage.getItem(LOCATION_FILTER_KEY) || "all";
+  const raw = localStorage.getItem(LOCATION_FILTER_KEY) || "all";
+  const value = migrateLocationFilterValue(raw);
+  if (value !== raw) {
+    try { localStorage.setItem(LOCATION_FILTER_KEY, value); } catch { /* ignore */ }
+  }
   return value || "all";
 }
 
@@ -161,7 +196,7 @@ function setLocationFilter(value) {
 
 function matchesLocationFilter(task, locFilter) {
   if (!locFilter || locFilter === "all") return true;
-  if (locFilter === "other") return !task.locationId;
+  if (locFilter === LOCATION_NONE_FILTER) return !task.locationId;
   return task.locationId === locFilter;
 }
 
@@ -510,8 +545,8 @@ function fillLocationFilter() {
     sel.append(option);
   };
   add("all", "Alle");
-  locationItems().forEach((item) => add(item.id, item.label || item.id));
-  add("other", "Overig");
+  activeLocationItems().forEach((item) => add(item.id, item.label || item.id));
+  add(LOCATION_NONE_FILTER, "Zonder locatie");
   const allowed = new Set([...sel.options].map((option) => option.value));
   const next = allowed.has(current) ? current : "all";
   sel.value = next;
@@ -533,13 +568,13 @@ function fillLocationSelect(resetChoice = false) {
   first.selected = true;
   first.defaultSelected = true;
   sel.append(first);
-  activeLocationItems().forEach((item) => {
+  staffSelectableLocationItems().forEach((item) => {
     const option = document.createElement("option");
     option.value = item.id;
     option.textContent = item.label || item.id;
     sel.append(option);
   });
-  if (!resetChoice && current && activeLocationItems().some((item) => item.id === current)) {
+  if (!resetChoice && current && staffSelectableLocationItems().some((item) => item.id === current)) {
     sel.value = current;
   } else {
     sel.selectedIndex = 0;
@@ -1168,7 +1203,7 @@ async function onAddTaskSubmit(event) {
   }
   const title = document.getElementById("add-task-title-input").value.trim();
   const locationId = document.getElementById("add-task-location-input").value.trim();
-  const chosen = activeLocationItems().find((item) => item.id === locationId);
+  const chosen = staffSelectableLocationItems().find((item) => item.id === locationId);
   const location = chosen ? String(chosen.label || "").trim() : "";
   const description = document.getElementById("add-task-description-input").value.trim();
   if (!title) {
