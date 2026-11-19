@@ -29,23 +29,23 @@
   }
 }
   </script>
-  <link rel="manifest" href="manifest.webmanifest?v=25">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=25">
-  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=25">
-  <link rel="icon" href="favicon.ico?v=25" sizes="any">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=25">
-  <link rel="stylesheet" href="../styles.css?v=25">
-  <link rel="stylesheet" href="admin.css?v=25">
+  <link rel="manifest" href="manifest.webmanifest?v=26">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=26">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=26">
+  <link rel="icon" href="favicon.ico?v=26" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=26">
+  <link rel="stylesheet" href="../styles.css?v=26">
+  <link rel="stylesheet" href="admin.css?v=26">
 </head>
 <body>
   <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
   <header>
     <div class="header-inner">
-      <h1>Zeiklijst Admin</h1>
+      <h1><button type="button" id="logo-home-title" class="logo-home-title" aria-label="Naar het dashboard">Zeiklijst Admin</button></h1>
       <div class="header-actions">
-        <a href="../" class="app-switch" aria-label="Naar Zeiklijst Live">
+        <button type="button" id="logo-home" class="app-switch" aria-label="Naar het dashboard">
           <img src="../icons/icon-192.png" alt="" width="32" height="32">
-        </a>
+        </button>
       <div id="admin-controls" class="hidden">
         <nav class="admin-nav" id="admin-nav">
           <button type="button" id="nav-toggle" class="nav-toggle" aria-expanded="false" aria-haspopup="true" aria-controls="nav-menu">
@@ -59,13 +59,14 @@
           </button>
           <ul id="nav-menu" class="nav-menu hidden" role="menu">
             <li role="none"><button type="button" role="menuitem" data-section="dashboard">Dashboard</button></li>
+            <li role="none"><button type="button" role="menuitem" data-section="audit">Audit lopen</button></li>
+            <li role="none"><button type="button" role="menuitem" data-section="audits">Audits</button></li>
             <li role="none">
               <button type="button" role="menuitem" data-section="medewerkers">
-                Medewerkers
+                Overzicht Medewerkers
                 <span id="nav-medewerkers-badge" class="nav-badge nav-badge-pin hidden">0</span>
               </button>
             </li>
-            <li role="none"><button type="button" role="menuitem" data-section="medewerker">Per medewerker</button></li>
             <li role="none">
               <button type="button" role="menuitem" data-section="taken">
                 Taken
@@ -86,8 +87,11 @@
                 <span id="nav-reports-badge" class="nav-badge nav-badge-report hidden">0</span>
               </button>
             </li>
+            <li role="none"><button type="button" role="menuitem" data-section="beheer">Locaties &amp; vragen</button></li>
             <li role="none"><button type="button" role="menuitem" data-section="data">Data</button></li>
+            <li role="none"><a role="menuitem" class="nav-link" href="../">Naar medewerkersapp</a></li>
             <li role="none"><button type="button" role="menuitem" id="logout-btn">Uitloggen</button></li>
+            <li role="none" class="made-by">Made by Jordi-CyX</li>
           </ul>
         </nav>
         </div>
@@ -110,6 +114,7 @@
         </div>
       </form>
     </div>
+    <p class="made-by">Made by Jordi-CyX</p>
   </div>
 
   <main id="admin-app" class="hidden">
@@ -127,20 +132,37 @@
         </button>
         <button type="button" class="stat-card stat-overdue" id="stat-overdue-card">
           <span class="stat-value" id="stat-overdue">0</span>
-          <span class="stat-label">Streefdatum verstreken</span>
+          <span class="stat-label">Streefdatum</span>
+          <span class="stat-sub" id="stat-due-sub">0 verstreken · 0 binnenkort</span>
         </button>
       </div>
       <p class="stat-done-mini">Afgerond: <strong id="stat-done">0</strong></p>
+      <nav id="dashboard-nav" class="dashboard-nav" aria-label="Menu"></nav>
+      <div id="dashboard-v2"></div>
       <div id="dashboard-overdue" class="overdue-list hidden"></div>
       <div id="dashboard-staff-tasks" class="staff-created-list hidden"></div>
-      <h3>Huidige verdeling</h3>
-      <div id="dashboard-workload" class="workload-list"></div>
       <h3>Laatste pending</h3>
       <div id="dashboard-pending"></div>
     </section>
 
+    <section id="section-audit" class="admin-section hidden" data-section="audit">
+      <h2>Audit lopen</h2>
+      <div id="audit-root" class="audit-root"></div>
+    </section>
+
+    <section id="section-audits" class="admin-section hidden" data-section="audits">
+      <h2>Audits</h2>
+      <div id="audits-root"></div>
+    </section>
+
+    <section id="section-beheer" class="admin-section hidden" data-section="beheer">
+      <h2>Locaties &amp; vragen</h2>
+      <div id="beheer-root" class="emp-dash"></div>
+    </section>
+
     <section id="section-medewerkers" class="admin-section hidden" data-section="medewerkers">
-      <h2>Medewerkers</h2>
+      <h2>Overzicht Medewerkers</h2>
+      <p class="section-intro">Tik op een medewerker voor startcode, pincode resetten en extra gegevens.</p>
       <div id="medewerkers-pin-resets" class="pin-reset-list hidden"></div>
       <form id="add-employee-form">
         <label>
@@ -160,9 +182,10 @@
     </section>
 
     <section id="section-medewerker" class="admin-section hidden" data-section="medewerker">
-      <h2>Per medewerker</h2>
+      <button type="button" id="emp-dash-back" class="secondary back-btn back-up">← Overzicht Medewerkers</button>
+      <h2>Medewerker</h2>
       <label class="emp-dash-picker">
-        Kies medewerker
+        Andere medewerker
         <select id="emp-dash-select"></select>
       </label>
       <p id="emp-dash-empty" class="empty-state">Kies een medewerker om startcode, pincode en gegevens te beheren.</p>
@@ -205,7 +228,15 @@
       <summary><span id="task-form-heading">Nieuwe taak</span></summary>
       <form id="add-task-form">
         <input type="text" id="title" placeholder="Titel" required autocomplete="off">
-        <input type="text" id="location" placeholder="Locatie (bijv. Gang 12 of Buitenterrein)" autocomplete="off">
+        <label>
+          Locatie
+          <select id="location-select"><option value="">Geen locatie</option></select>
+        </label>
+        <p id="location-legacy" class="pin-meta hidden"></p>
+        <label class="check-row">
+          <input type="checkbox" id="is-urgent">
+          Spoed (bovenaan bij medewerkers)
+        </label>
         <label id="due-date-wrap">
           Streefdatum (optioneel)
           <input type="date" id="due-date">
@@ -260,6 +291,8 @@
       </form>
       </details>
 
+      <details class="fold" data-fold="zoeken" open>
+      <summary class="fold-summary"><h3>Zoeken</h3></summary>
       <div class="task-toolbar">
         <label class="task-search">
           Zoeken
@@ -272,6 +305,7 @@
             <button type="button" data-filter="open">Open</button>
             <button type="button" data-filter="pending">Pending</button>
             <button type="button" data-filter="overdue">Streefdatum verstreken</button>
+            <button type="button" data-filter="due">Streefdatum (verstreken + binnenkort)</button>
           </div>
         </div>
         <label>
@@ -287,6 +321,14 @@
           </select>
         </label>
         <div class="filter-group">
+          <span class="filter-label">Spoed</span>
+          <div class="filter-chips" id="filter-urgent" role="group" aria-label="Filter op spoed">
+            <button type="button" data-filter="all" aria-pressed="true">Alles</button>
+            <button type="button" data-filter="yes">Alleen spoed</button>
+          </div>
+        </div>
+        <p id="filter-audit-note" class="filter-audit-note hidden"><span id="filter-audit-text">Alleen audit-taken</span> <button type="button" id="filter-audit-clear" class="secondary">Filter wissen</button></p>
+        <div class="filter-group">
           <span class="filter-label">Soort</span>
           <div class="filter-chips" id="filter-recurring" role="group" aria-label="Filter op herhaling">
             <button type="button" data-filter="all" aria-pressed="true">Alles</button>
@@ -295,12 +337,17 @@
           </div>
         </div>
       </div>
+      </details>
 
-      <h3>Terugkerende taken</h3>
-      <div id="template-list"></div>
+      <details class="fold" data-fold="terugkerend" open>
+        <summary class="fold-summary"><h3>Terugkerende taken</h3></summary>
+        <div id="template-list"></div>
+      </details>
 
-      <h3>Takenlijst</h3>
-      <div id="task-list"></div>
+      <details class="fold" data-fold="takenlijst" open>
+        <summary class="fold-summary"><h3>Takenlijst</h3></summary>
+        <div id="task-list"></div>
+      </details>
 
       <details id="completed-section">
         <summary>Afgerond <span id="completed-count" class="count-pill">0</span></summary>
@@ -350,6 +397,8 @@
           <button type="button" id="migrate-dismiss" class="secondary">Niet nu</button>
         </div>
       </div>
+      <div id="data-v2"></div>
+      <h3>Export / import (oud formaat)</h3>
       <p class="section-intro">Exporteer of importeer een back-up van taken, herhalingen en medewerkers. De export bevat ook de extra gegevens per medewerker (die worden niet geïmporteerd).</p>
       <div class="form-actions">
         <button type="button" id="export-btn">Exporteer</button>
@@ -379,6 +428,13 @@
       <div id="modal-description"></div>
       <div id="modal-rejections"></div>
       <div id="modal-photos"></div>
+      <div id="relocate-row" class="reassign-row">
+        <label>
+          Locatie
+          <select id="relocate-select"></select>
+        </label>
+        <button type="button" id="relocate-btn">Opslaan</button>
+      </div>
       <div id="reassign-row">
         <label>
           Toewijzen aan
@@ -432,12 +488,13 @@
     </div>
   </div>
   <div id="app-toast" class="app-toast hidden" role="status"></div>
+  <div id="print-view" class="print-view" aria-hidden="true"></div>
 
   <div id="image-lightbox" class="lightbox hidden" role="dialog" aria-modal="true" aria-label="Vergrote foto">
     <button type="button" class="close" id="lightbox-close" aria-label="Sluiten">&times;</button>
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=25"></script>
+  <script type="module" src="admin.js?v=26"></script>
 </body>
 </html>
