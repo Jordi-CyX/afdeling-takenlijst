@@ -1,17 +1,12 @@
 // Versioned URL so an HTTP-cached app-version.js can never give a new worker the old cache name.
-importScripts("./app-version.js?v=19");
-const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v19";
-const FIREBASE_SDK = "12.6.0";
+importScripts("./app-version.js?v=19-onderhoud");
+const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v19-onderhoud";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
-  "./app.js",
   "./app-version.js",
-  "./staff-auth.js",
-  "./limits.js",
-  "./shared.js",
-  "./firebase-init.js",
+  "./maintenance.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
@@ -25,40 +20,23 @@ const ASSETS = [
   "./fonts/rubik-distressed.woff2",
   "./fonts/zeiklijst-display.css",
   "./logo.png",
-  "./logo.svg",
-  // L7: the Firebase SDK is vendored (see the import map in index.html).
-  `./vendor/firebase/${FIREBASE_SDK}/firebase-app.js`,
-  `./vendor/firebase/${FIREBASE_SDK}/firebase-auth.js`,
-  `./vendor/firebase/${FIREBASE_SDK}/firebase-firestore.js`
+  "./logo.svg"
 ];
-const FONT_HOSTS = new Set(["fonts.googleapis.com", "fonts.gstatic.com"]);
-
-function isFirebaseSdk(url) {
-  return url.hostname === "www.gstatic.com" && url.pathname.startsWith("/firebasejs/");
-}
 
 function isAdminPath(url) {
   return url.pathname.includes("/admin/");
 }
 
-// Workers from the maintenance period (v17) auto-activated and have no update
-// banner, so a phone still on the maintenance screen could never tap
-// "Nieuwe versie beschikbaar". Only in that case this worker takes over by
-// itself; otherwise it waits for SKIP_WAITING from the update banner.
-const MAINTENANCE_CACHES = ["zeiklijst-v17"];
-
-async function replacingMaintenanceWorker() {
-  if (!self.registration.active) return false;
-  const keys = await caches.keys();
-  return keys.some((key) => MAINTENANCE_CACHES.includes(key));
+function isHtmlNavigation(request, url) {
+  if (request.mode === "navigate") return true;
+  const path = url.pathname;
+  return path.endsWith("/") || path.endsWith("/index.html");
 }
 
 self.addEventListener("install", (event) => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(ASSETS);
-    if (await replacingMaintenanceWorker()) await self.skipWaiting();
-  })());
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("message", (event) => {
@@ -68,14 +46,23 @@ self.addEventListener("message", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      // Only remove old ZL caches; leave the admin app's caches alone.
-      Promise.all(keys
-        .filter((key) => key.startsWith("zeiklijst-v") && key !== CACHE_NAME)
-        .map((key) => caches.delete(key)))
-    ).then(() => self.clients.claim())
-  );
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    // Only remove old ZL caches; leave the admin app's caches alone.
+    await Promise.all(keys
+      .filter((key) => key.startsWith("zeiklijst-v") && key !== CACHE_NAME)
+      .map((key) => caches.delete(key)));
+    await self.clients.claim();
+    // Force open v19 (and other) tabs to the maintenance screen even if
+    // location.reload() in the old page's controllerchange handler races.
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    await Promise.all(windows.map((client) => {
+      if (typeof client.navigate === "function") {
+        return client.navigate(client.url).catch(() => {});
+      }
+      return Promise.resolve();
+    }));
+  })());
 });
 
 self.addEventListener("fetch", (event) => {
@@ -86,23 +73,27 @@ self.addEventListener("fetch", (event) => {
   // Do not control or cache the Admin PWA.
   if (isAdminPath(url)) return;
 
-  if (isFirebaseSdk(url) || FONT_HOSTS.has(url.hostname)) {
+  if (url.origin !== self.location.origin) return;
+
+  // Always take index.html / navigations from the network so phones
+  // do not keep serving the old app from cache during maintenance.
+  if (isHtmlNavigation(request, url)) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);
-      const cached = await cache.match(request);
       try {
-        const response = await fetch(request);
+        const response = await fetch(request, { cache: "no-cache" });
         if (response && response.ok) cache.put(request, response.clone());
         return response;
-      } catch (err) {
+      } catch {
+        const cached = await cache.match(request, { ignoreSearch: true });
         if (cached) return cached;
-        throw err;
+        const fallback = await cache.match("./index.html");
+        if (fallback) return fallback;
+        throw new Error("Offline and not cached");
       }
     })());
     return;
   }
-
-  if (url.origin !== self.location.origin) return;
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -113,10 +104,6 @@ self.addEventListener("fetch", (event) => {
     } catch {
       const cached = await cache.match(request, { ignoreSearch: true });
       if (cached) return cached;
-      if (request.mode === "navigate") {
-        const fallback = await cache.match("./index.html");
-        if (fallback) return fallback;
-      }
       throw new Error("Offline and not cached");
     }
   })());
