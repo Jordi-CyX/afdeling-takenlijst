@@ -89,6 +89,20 @@ function appVersion() {
   return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v20";
 }
 
+// Visible label from the cache name, e.g. "zeiklijst-v20" -> "v20".
+function displayAppVersion() {
+  const cache = String(appVersion());
+  const match = cache.match(/v(\d+)\s*$/i);
+  return match ? "v" + match[1] : cache;
+}
+
+function paintAppVersionLabel() {
+  const el = document.getElementById("app-version-label");
+  if (!el) return;
+  el.textContent = displayAppVersion();
+  el.removeAttribute("hidden");
+}
+
 // Copy v2 fields that the current shared.js normalizeTask may still omit.
 // When ZLA's shared.js starts returning them, this stays harmless.
 function enrichTask(id, data) {
@@ -1467,6 +1481,8 @@ function setupUpdateBanner() {
 }
 
 setupUi();
+paintAppVersionLabel();
+
 initStaffAuth({
   showToast,
   onLoggedIn() {
