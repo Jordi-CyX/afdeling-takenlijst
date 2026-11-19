@@ -1096,7 +1096,7 @@ header h1 { min-width: min-content; }
 @media (max-width: 480px) {
   header .admin-nav { flex: 0 1 auto; min-width: 0; }
   .nav-toggle { max-width: 100%; padding: 0.45rem 0.6rem; }
-  #nav-current { min-width: 0; max-width: 6.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #nav-current { min-width: 0; max-width: 5.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 /* Contrast (WCAG AA) */
@@ -1148,3 +1148,4 @@ details.fold:not([open]) > .fold-summary::after { content: "▸ Uitklappen"; }
   main button.dash-nav-btn.secondary { background: transparent; color: var(--text); border-color: var(--border); }
   .dashboard-nav .made-by { display: none; }
 }
+.loc-staff { font-size: 0.85rem; font-weight: 600; gap: 0.35rem; margin: 0; flex-direction: row; align-items: center; display: inline-flex; }

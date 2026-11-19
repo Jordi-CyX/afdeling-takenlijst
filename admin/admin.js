@@ -2039,7 +2039,7 @@ function taskMatchesFilters(task, includeCompleted = false) {
   }
   const location = taskFilters.location || "all";
   if (location !== "all") {
-    // Build v2: filter op vaste locatie; "Overig" = niet gekoppeld (oude vrije tekst of geen locatie).
+    // Build v2: filter op vaste locatie; "Zonder locatie" = niet gekoppeld (oude vrije tekst of geen locatie).
     if (location === "__unlinked__") {
       if (task.locationId) return false;
     } else if (task.locationId !== location) return false;
@@ -2072,7 +2072,7 @@ function fillTaskFilters() {
     ["all", "Alle locaties"],
     ...activeLocations().map((loc) => [loc.id, loc.label]),
     ...usedInactive.map((id) => [id, `${locationLabelById(id) || id} (inactief)`]),
-    ["__unlinked__", "Overig (niet gekoppeld)"]
+    ["__unlinked__", "Zonder locatie"]
   ]);
   if ([...locSelect.options].some((o) => o.value === prevLoc)) locSelect.value = prevLoc;
   else locSelect.value = "all";

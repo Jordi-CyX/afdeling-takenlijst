@@ -29,8 +29,10 @@ export const DEFAULT_LOCATIONS = [
   ...PADEN.map((n) => ({ id: `pad-${n}`, label: `Pad ${n}` })),
   { id: "balie-sanitair", label: "Balie sanitair" },
   { id: "balie-tegels", label: "Balie tegels" },
-  { id: "z-karren", label: "Z-karren" }
-].map((loc, i) => ({ ...loc, order: i + 1, active: true }));
+  { id: "z-karren", label: "Z-karren" },
+  // Eigenaar 12:46: "Overig" alleen voor admin/audit; medewerkers kunnen het niet kiezen.
+  { id: "overig", label: "Overig", staffSelectable: false }
+].map((loc, i) => ({ staffSelectable: true, ...loc, order: i + 1, active: true }));
 
 const L = LOCATION_PLACEHOLDER;
 
@@ -99,6 +101,14 @@ export function defaultAuditSections() {
       questions: [
         { id: "prijzen", text: "Zijn de prijzen duidelijk zichtbaar?", trigger: "nee", taskText: "Z-karren - Prijzen aanbrengen" },
         { id: "artikelen", text: "Zijn de artikelen netjes en commercieel gepresenteerd?", trigger: "nee", taskText: "Z-karren - Opruimen" }
+      ]
+    },
+    {
+      // Eigenaar 12:46: laatste onderdeel, zonder standaardvragen.
+      locationId: "overig",
+      questions: [
+        { id: "kopstellingen", text: "Zijn de kopstellingen commercieel?", trigger: "nee", taskText: "Overig - Kopstellingen commercieel maken" },
+        { id: "gaatjesborden", text: "Zijn de gaatjesborden commercieel?", trigger: "nee", taskText: "Overig - Gaatjesborden commercieel maken" }
       ]
     }
   ];
