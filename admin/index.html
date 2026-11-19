@@ -10,14 +10,32 @@
   <meta name="apple-mobile-web-app-title" content="ZL Admin">
   <meta name="description" content="Zeiklijst Admin — beheer van de afdelingstakenlijst">
   <title>Zeiklijst Admin</title>
-  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
-  <link rel="manifest" href="manifest.webmanifest?v=22">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=22">
-  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=22">
-  <link rel="icon" href="favicon.ico?v=22" sizes="any">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=22">
-  <link rel="stylesheet" href="../styles.css?v=22">
-  <link rel="stylesheet" href="admin.css?v=22">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-1zQHqavH8UVYZwCpPbkh085+U+MWgunMtNIPcscICjY='; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com; frame-src https://zeiklijst-live.firebaseapp.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <!-- M4/L7 (ZLA v23): CSP als meta-tag en de Firebase SDK 12.6.0 uit ../vendor/firebase/ (van ZL).
+       De import map stuurt elke gstatic-import (ook in ../shared.js en ../firebase-init.js) naar de lokale kopie,
+       met integrity-hashes. Wijzig je de import map, werk dan ook de sha256 in script-src bij. -->
+  <script type="importmap">
+{
+  "imports": {
+    "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js": "../vendor/firebase/12.6.0/firebase-app.js",
+    "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js": "../vendor/firebase/12.6.0/firebase-auth.js",
+    "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js": "../vendor/firebase/12.6.0/firebase-firestore.js"
+  },
+  "integrity": {
+    "../vendor/firebase/12.6.0/firebase-app.js": "sha384-p9dnt7AYPJEi2HmCO37Oo1BkTQD1ny3fd7+M0sJqZgseUq3Ns0g1kSSI2zFuQidS",
+    "../vendor/firebase/12.6.0/firebase-auth.js": "sha384-gnVXhpQ24ZJJrseJdRWYRIRMmKucgVxSBfT+IrJ0FR3/iBpaDY/e0qYHMDsyWIcQ",
+    "../vendor/firebase/12.6.0/firebase-firestore.js": "sha384-Q54aZ7UJSh//f1vbTL2YCWkmMx+4e8TDX6kwQz36BgZy3bN8/5hivp5RkvGpdPkw"
+  }
+}
+  </script>
+  <link rel="manifest" href="manifest.webmanifest?v=23">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=23">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=23">
+  <link rel="icon" href="favicon.ico?v=23" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=23">
+  <link rel="stylesheet" href="../styles.css?v=23">
+  <link rel="stylesheet" href="admin.css?v=23">
 </head>
 <body>
   <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
@@ -379,6 +397,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=22"></script>
+  <script type="module" src="admin.js?v=23"></script>
 </body>
 </html>

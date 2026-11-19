@@ -1,4 +1,4 @@
-const CACHE_NAME = "zeiklijst-admin-v22";
+const CACHE_NAME = "zeiklijst-admin-v23";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
@@ -19,14 +19,10 @@ const ASSETS = [
   "../firebase-init.js",
   "../fonts/rubik-dirt.woff2",
   "../icons/icon-192.png",
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-app.js`,
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-auth.js`,
-  `https://www.gstatic.com/firebasejs/${FIREBASE_SDK}/firebase-firestore.js`
+  `../vendor/firebase/${FIREBASE_SDK}/firebase-app.js`,
+  `../vendor/firebase/${FIREBASE_SDK}/firebase-auth.js`,
+  `../vendor/firebase/${FIREBASE_SDK}/firebase-firestore.js`
 ];
-
-function isFirebaseSdk(url) {
-  return url.hostname === "www.gstatic.com" && url.pathname.startsWith("/firebasejs/");
-}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -52,22 +48,6 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
   const url = new URL(request.url);
-
-  if (isFirebaseSdk(url)) {
-    event.respondWith((async () => {
-      const cache = await caches.open(CACHE_NAME);
-      const cached = await cache.match(request);
-      try {
-        const response = await fetch(request);
-        if (response && response.ok) cache.put(request, response.clone());
-        return response;
-      } catch (err) {
-        if (cached) return cached;
-        throw err;
-      }
-    })());
-    return;
-  }
 
   if (url.origin !== self.location.origin) return;
 
