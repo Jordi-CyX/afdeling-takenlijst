@@ -304,6 +304,40 @@ await t("M2-limiet", "limietdocs wissen door niet-admin faalt", async () => { aw
 await t("M2-limiet", "anoniem: eigen en globaal limietdoc lezen slaagt, ander uid faalt", async () => { await seedDoc("pinResetLimits/_global", { lastAt: ago(30000), requestId: "x0000000000000000001", day: dayNumber(), count: 1 }); await seedDoc("pinResetLimits/anon1", { lastAt: ago(30000), requestId: "x0000000000000000001" }); await seedDoc("pinResetLimits/anon2", { lastAt: ago(30000), requestId: "x0000000000000000001" }); await assertSucceeds(anonCtx().doc("pinResetLimits/_global").get()); await assertSucceeds(anonCtx().doc("pinResetLimits/anon1").get()); await assertFails(anonCtx().doc("pinResetLimits/anon2").get()); await assertFails(anonCtx().collection("pinResetLimits").get()); });
 await t("M2-limiet", "admin: limietdocs lezen en wissen slaagt", async () => { await seedDoc("pinResetLimits/_global", { lastAt: ago(30000), requestId: "x0000000000000000001", day: dayNumber(), count: 20 }); const db = env.authenticatedContext(ADMIN).firestore(); await assertSucceeds(db.collection("pinResetLimits").get()); await assertSucceeds(db.doc("pinResetLimits/_global").delete()); });
 
+// --- Admin v24: employeeDetails (alleen admin, vaste velden) ---
+const ADM = () => env.authenticatedContext(ADMIN).firestore();
+const details = (over = {}) => ({ role: "Verkoper", staffNumber: "HB12345", contractHours: 32, workdays: [1, 2, 4, 6], startDate: "2021-03-01", note: "Sleutelhouder", updatedAt: ST(), ...over });
+await t("details", "admin: volledige details opslaan slaagt", () => assertSucceeds(ADM().doc("employeeDetails/emp-jane").set(details())));
+await t("details", "admin: alleen updatedAt (alles leeg) slaagt", () => assertSucceeds(ADM().doc("employeeDetails/emp-jane").set({ updatedAt: ST() })));
+await t("details", "admin: halve contracturen (24.5) slaagt", () => assertSucceeds(ADM().doc("employeeDetails/emp-jane").set(details({ contractHours: 24.5 }))));
+await t("details", "admin: 0 en 48 contracturen slagen", async () => { await assertSucceeds(ADM().doc("employeeDetails/emp-jane").set(details({ contractHours: 0 }))); await assertSucceeds(ADM().doc("employeeDetails/emp-aart").set(details({ contractHours: 48 }))); });
+await t("details", "admin: lezen, lijst en wissen slaagt", async () => { await seedDoc("employeeDetails/emp-jane", { role: "x", updatedAt: TS.now() }); await assertSucceeds(ADM().doc("employeeDetails/emp-jane").get()); await assertSucceeds(ADM().collection("employeeDetails").get()); await assertSucceeds(ADM().doc("employeeDetails/emp-jane").delete()); });
+await t("details", "admin: zelfde batch als medewerker verwijderen slaagt", async () => { await seedDoc("employeeDetails/emp-jane", { role: "x", updatedAt: TS.now() }); const db = ADM(); const b = db.batch(); b.delete(db.doc("employees/emp-jane")); b.delete(db.doc("employeeDetails/emp-jane")); await assertSucceeds(b.commit()); });
+await t("details", "medewerker: eigen details lezen faalt", async () => { await seedDoc("employeeDetails/emp-staff", { role: "x", updatedAt: TS.now() }); await assertFails(S().doc("employeeDetails/emp-staff").get()); await assertFails(S().collection("employeeDetails").get()); });
+await t("details", "medewerker: details schrijven faalt", () => assertFails(S().doc("employeeDetails/emp-staff").set(details())));
+await t("details", "reader: details lezen faalt", async () => { await seedDoc("employeeDetails/emp-jane", { role: "x", updatedAt: TS.now() }); const db = env.authenticatedContext(READER).firestore(); await assertFails(db.doc("employeeDetails/emp-jane").get()); await assertFails(db.collection("employeeDetails").get()); });
+await t("details", "anoniem/niet ingelogd: lezen en schrijven faalt", async () => { await seedDoc("employeeDetails/emp-jane", { role: "x", updatedAt: TS.now() }); await assertFails(anonCtx().doc("employeeDetails/emp-jane").get()); await assertFails(anonCtx().doc("employeeDetails/emp-jane").set(details())); await assertFails(env.unauthenticatedContext().firestore().doc("employeeDetails/emp-jane").get()); });
+await t("details", "onbekend veld (phone) faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ phone: "0612345678" }))));
+await t("details", "onbekend veld (department) faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ department: "Tuin" }))));
+await t("details", "zonder updatedAt faalt", async () => { const d = details(); delete d.updatedAt; await assertFails(ADM().doc("employeeDetails/emp-jane").set(d)); });
+await t("details", "eigen updatedAt faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ updatedAt: TS.fromMillis(Date.now() - DAY) }))));
+await t("details", "onbekende medewerker faalt", () => assertFails(ADM().doc("employeeDetails/emp-bestaatniet").set(details())));
+await t("details", "functie > 40 tekens faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ role: "x".repeat(41) }))));
+await t("details", "lege functie faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ role: "  " }))));
+await t("details", "personeelsnummer met teken faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ staffNumber: "HB-12<3" }))));
+await t("details", "personeelsnummer > 20 faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ staffNumber: "A".repeat(21) }))));
+await t("details", "contracturen 49 faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ contractHours: 49 }))));
+await t("details", "contracturen negatief faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ contractHours: -1 }))));
+await t("details", "contracturen als tekst faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ contractHours: "32" }))));
+await t("details", "werkdag 7 faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ workdays: [1, 7] }))));
+await t("details", "dubbele werkdag faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ workdays: [1, 1] }))));
+await t("details", "werkdagen als tekst faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ workdays: ["ma"] }))));
+await t("details", "in dienst sinds fout formaat faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ startDate: "01-03-2021" }))));
+await t("details", "in dienst sinds over 2 jaar faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ startDate: ymd(800) }))));
+await t("details", "in dienst sinds over 2 maanden slaagt", () => assertSucceeds(ADM().doc("employeeDetails/emp-jane").set(details({ startDate: ymd(60) }))));
+await t("details", "notitie > 500 faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ note: "x".repeat(501) }))));
+await t("details", "notitie 500 slaagt", () => assertSucceeds(ADM().doc("employeeDetails/emp-jane").set(details({ note: "x".repeat(500) }))));
+
 // --- Reader en admin ---
 await t("reader", "reader: tasks en employees lezen slaagt", async () => { const db = env.authenticatedContext(READER).firestore(); await assertSucceeds(db.collection("tasks").get()); await assertSucceeds(db.collection("employees").get()); });
 await t("reader", "reader: geen startCodes/reports/nameIndex/schrijven", async () => { const db = env.authenticatedContext(READER).firestore(); await assertFails(db.collection("startCodes").get()); await assertFails(db.collection("reports").get()); await assertFails(db.collection("nameIndex").get()); await assertFails(db.doc("tasks/t1").update({ title: "x" })); });
