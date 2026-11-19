@@ -31,17 +31,18 @@
   --accent: #F99D27;
   --accent-hover: #FFB14A;
   --accent-soft: rgba(249, 157, 39, 0.22);
+  --border-on-dark: #8A8684;
   --magenta: #C40070;
   --magenta-hover: #E01886;
   --magenta-soft: rgba(196, 0, 112, 0.16);
   --text: #231F20;
   --text-muted: #5A5556;
   --text-on-dark: #F4F2F0;
-  --border: #8A8684;
+  --border: #7A7674;
   --danger: #C62828;
-  --danger-hover: #E53935;
+  --danger-hover: #D32F2F;
   --success: #2E7D4F;
-  --success-hover: #3B8F5E;
+  --success-hover: #287448;
   --pending: #C40070;
   --radius: 14px;
   --shadow: 0 6px 18px rgba(35, 31, 32, 0.28);
@@ -101,7 +102,7 @@ header {
   display: inline-flex;
   align-items: center;
   background: #1A1818;
-  border: 1px solid #5A5A5A;
+  border: 1px solid var(--border-on-dark);
   border-radius: 10px;
   padding: 2px;
   gap: 2px;
@@ -111,9 +112,9 @@ header {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  min-height: 36px;
-  height: 36px;
+  width: 44px;
+  min-height: 44px;
+  height: 44px;
   padding: 0;
   border-radius: 8px;
   border: none;
@@ -145,7 +146,7 @@ header {
   height: 40px;
   padding: 0;
   border-radius: 10px;
-  border: 1px solid #5A5A5A;
+  border: 1px solid var(--border-on-dark);
   background: #1A1818;
   flex-shrink: 0;
   line-height: 0;
@@ -211,10 +212,38 @@ button {
 button:hover { background: var(--accent-hover); }
 button:active { transform: scale(0.98); }
 
+button:disabled,
+button:disabled:hover {
+  cursor: not-allowed;
+  transform: none;
+  background: #C5C1BE;
+  color: #4A4546;
+  opacity: 1;
+}
+button.danger:disabled,
+button.danger:disabled:hover {
+  background: #C62828;
+  color: #fff;
+  opacity: 0.5;
+}
+button.success:disabled,
+button.success:disabled:hover {
+  background: #2E7D4F;
+  color: #fff;
+  opacity: 0.5;
+}
+button.secondary:disabled,
+button.secondary:disabled:hover {
+  background: transparent;
+  color: #5A5556;
+  border-color: #7A7674;
+  opacity: 0.75;
+}
+
 button.secondary {
   background: transparent;
   color: var(--text-on-dark);
-  border: 1px solid #5A5A5A;
+  border: 1px solid var(--border-on-dark);
 }
 header button.secondary:hover { background: #3A3A3A; }
 
@@ -225,6 +254,12 @@ main button.secondary {
 main button.secondary:hover,
 .modal button.secondary:hover {
   background: #d5d7d8;
+  color: var(--text);
+}
+
+.modal button.secondary {
+  color: var(--text);
+  border-color: var(--border);
 }
 
 button.danger { background: var(--danger); color: #fff; }
@@ -511,8 +546,8 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   white-space: nowrap;
 }
 
-.badge.open { background: var(--accent-soft); color: #9A4A00; }
-.badge.pending { background: var(--magenta-soft); color: var(--magenta); }
+.badge.open { background: var(--accent-soft); color: #8B4000; }
+.badge.pending { background: var(--magenta-soft); color: #8B004E; }
 .badge.afgerond { background: rgba(46, 125, 79, 0.18); color: #1E5A38; }
 .badge.recurring, .badge.paused {
   background: transparent;
@@ -742,8 +777,8 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .guest-app .task-age.hidden { display: none; }
 .guest-app .badge.rejected {
   background: rgba(196, 0, 112, 0.12);
-  color: var(--magenta);
-  border: 1px solid var(--magenta);
+  color: #8B004E;
+  border: 1px solid #8B004E;
 }
 
 .guest-app .filter-chips {
@@ -753,7 +788,7 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   margin: 0 0 1rem;
 }
 .guest-app .chip {
-  min-height: 36px;
+  min-height: 44px;
   padding: 0.3rem 0.8rem;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -807,11 +842,11 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   padding: 0;
-  border: 1px solid #5A5A5A;
+  border: 1px solid var(--border-on-dark);
   border-radius: 8px;
   background: transparent;
   color: #9A9694;
@@ -833,7 +868,7 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   top: calc(100% + 6px);
   min-width: 12.5rem;
   background: #2A2728;
-  border: 1px solid #5A5A5A;
+  border: 1px solid var(--border-on-dark);
   border-radius: 10px;
   padding: 0.35rem;
   box-shadow: var(--shadow);
@@ -996,6 +1031,13 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   background: transparent;
   color: var(--text);
 }
+.guest-app .text-btn:disabled,
+.guest-app .text-btn:disabled:hover {
+  background: transparent;
+  color: #7A7674;
+  opacity: 0.75;
+  text-decoration: underline;
+}
 
 .guest-app .header-user {
   color: #9A9694;
@@ -1012,7 +1054,7 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   padding: 0.35rem 0.6rem 0.5rem;
   color: #9A9694;
   font-size: 0.8rem;
-  border-bottom: 1px solid #5A5A5A;
+  border-bottom: 1px solid var(--border-on-dark);
 }
 .guest-app .menu-user.hidden { display: none; }
 .guest-app .menu-action {
@@ -1078,7 +1120,7 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 
 .guest-app .badge.staff-created {
   background: var(--accent-soft);
-  color: #9A4A00;
+  color: #8B4000;
 }
 
 .guest-app .add-task-fab {
@@ -1157,7 +1199,7 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
-  min-height: 36px;
+  min-height: 44px;
   padding: 0.35rem 0.7rem;
   font-size: 0.85rem;
 }
@@ -1190,4 +1232,28 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   color: var(--text);
   font-size: 0.88rem;
   word-break: break-word;
+}
+
+/* —— Footer "Made by Jordi-CyX" (login + menu) —— */
+.guest-app .made-by {
+  margin: 0.85rem 0 0;
+  padding: 0;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+  color: #4A4546;
+}
+.guest-app .staff-login-card > .made-by {
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border);
+}
+.guest-app .header-more-menu > .made-by {
+  margin: 0.25rem 0 0;
+  padding: 0.5rem 0.6rem 0.3rem;
+  border-top: 1px solid var(--border-on-dark);
+  color: #D4D0CE;
+  font-size: 0.72rem;
+  font-weight: 600;
 }

@@ -79,7 +79,7 @@ const REPORT = {
 };
 
 function appVersion() {
-  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v19";
+  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v20";
 }
 
 function isStaffCreated(task) {
