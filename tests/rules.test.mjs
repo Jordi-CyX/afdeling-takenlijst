@@ -62,7 +62,9 @@ async function seed() {
       items: [
         { id: "bkc", label: "BKC", order: 1, active: true },
         { id: "pad-16", label: "Pad 16", order: 2, active: true },
-        { id: "oud-pad", label: "Oud pad", order: 3, active: false }
+        { id: "oud-pad", label: "Oud pad", order: 3, active: false },
+        // Build v2 (12:46): Overig is actief maar niet kiesbaar voor medewerkers -> niet in labels.
+        { id: "overig", label: "Overig", order: 4, active: true, staffSelectable: false }
       ],
       labels: { bkc: "BKC", "pad-16": "Pad 16" },
       updatedAt: TS.now()
@@ -476,6 +478,13 @@ await t("zl-vorm", "ZL-terugzetten oude afvinking zonder completion (collega) fa
 await t("zl-vorm", "ZL-terugzetten na migratie door collega faalt (completion van Aart bestaat)", async () => { await seedDoc("tasks/t-mig", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [] }); await seedDoc("taskCompletions/t-mig", { employeeId: "emp-aart", name: "Aart", at: TS.now(), legacy: true }); await assertFails(zlUntickLegacy(S2(), "t-mig")); });
 await t("zl-vorm", "ZL-terugzetten na migratie door eigenaar (eigen doc via query) slaagt", async () => { await seedDoc("tasks/t-mig", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [] }); await seedDoc("taskCompletions/t-mig", { employeeId: "emp-aart", name: "Aart", at: TS.now(), legacy: true }); await assertSucceeds(zlUntickOwn(staffCtx("u-aart"), "t-mig")); });
 await t("zl-vorm", "ZL-query eigen completions slaagt, zonder filter faalt", async () => { await assertSucceeds(S2().collection("taskCompletions").where("employeeId", "==", "emp-staff").get()); await assertFails(S2().collection("taskCompletions").get()); });
+// Locatie "Overig" (eigenaar 12:46): actief, staffSelectable:false, dus niet in labels.
+await t("v2-overig", "medewerker: taak met locatie Overig faalt", () => assertFails(addTask(S2(), zlCreate({ location: "Overig", locationId: "overig" }))));
+await t("v2-overig", "admin: taak met locatie Overig slaagt", () => assertSucceeds(A().doc("tasks/t-ov").set({ title: "Overig klusje", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(), photos: [], locationId: "overig", location: "Overig" })));
+await t("v2-overig", "admin: audit-taak met locatie Overig slaagt", () => assertSucceeds(A().doc("tasks/audit-a1-overig-kopstellingen").set({ title: "Overig - Kopstellingen commercieel maken", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(), photos: [], locationId: "overig", location: "Overig", urgent: false, source: src({ locationId: "overig", questionId: "kopstellingen" }) })));
+await t("v2-overig", "admin: oude taak koppelen aan Overig slaagt", () => assertSucceeds(A().doc("tasks/t1").update({ locationId: "overig" })));
+await t("v2-overig", "admin: locatielijst met staffSelectable opslaan slaagt", () => assertSucceeds(A().doc("settings/locations").set(locDoc({ items: [{ id: "bkc", label: "BKC", order: 1, active: true, staffSelectable: true }, { id: "overig", label: "Overig", order: 2, active: true, staffSelectable: false }], labels: { bkc: "BKC" } }))));
+await t("v2-overig", "medewerker: Overig-taak afvinken (gedeeld) slaagt", async () => { await seedDoc("tasks/t-ov2", { title: "Overig - Gaatjesborden commercieel maken", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(-1), photos: [], locationId: "overig", location: "Overig" }); await assertSucceeds(zlTick(S2(), "t-ov2")); });
 // Toewijzing bij aanmaken door een medewerker (eigenaar 12:20): zichzelf of "Allen", geen collega.
 await t("v2-assign", "medewerker: taak voor Allen (ALLEN/Allen) slaagt", () => assertSucceeds(addTask(S2(), zlCreate({ assigneeId: "ALLEN", assigneeName: "Allen" }))));
 await t("v2-assign", "medewerker: taak voor zichzelf slaagt nog", () => assertSucceeds(addTask(S2(), zlCreate())));

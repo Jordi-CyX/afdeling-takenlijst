@@ -88,7 +88,7 @@ export function startV2Listeners() {
 function normalizeLocationsDoc(data) {
   const items = (Array.isArray(data.items) ? data.items : [])
     .filter((it) => it && typeof it.id === "string" && typeof it.label === "string")
-    .map((it, i) => ({ id: it.id, label: it.label, order: Number(it.order) || i + 1, active: it.active !== false }))
+    .map((it, i) => ({ id: it.id, label: it.label, order: Number(it.order) || i + 1, active: it.active !== false, staffSelectable: it.staffSelectable !== false }))
     .sort((a, b) => a.order - b.order);
   return { items };
 }
@@ -149,9 +149,11 @@ function uniqueId(base, taken, max = 30) {
 }
 
 async function saveLocations(items) {
-  const sorted = items.map((it, i) => ({ id: it.id, label: it.label, order: i + 1, active: it.active !== false }));
+  const sorted = items.map((it, i) => ({ id: it.id, label: it.label, order: i + 1, active: it.active !== false, staffSelectable: it.staffSelectable !== false }));
+  // labels = wat medewerkers mogen kiezen (de regels controleren een nieuwe medewerkerstaak hiertegen):
+  // alleen actief én staffSelectable. De admin (en audit-taken) mag elke locatie gebruiken.
   const labels = {};
-  for (const it of sorted) if (it.active) labels[it.id] = it.label;
+  for (const it of sorted) if (it.active && it.staffSelectable) labels[it.id] = it.label;
   return ctx.safeWrite(() => setDoc(doc(db, "settings", "locations"), { items: sorted, labels, updatedAt: serverTimestamp() }));
 }
 
@@ -1073,11 +1075,12 @@ function renderLocationsAdmin() {
     <ol class="v2-list">
       ${items.map((l, i) => dom`
         <li class="v2-row${l.active ? "" : " inactive"}">
-          <span class="v2-row-main"><strong>${l.label}</strong> <span class="pin-meta">${l.id}</span>${l.active ? "" : dom` <span class="badge paused">Inactief</span>`}</span>
+          <span class="v2-row-main"><strong>${l.label}</strong> <span class="pin-meta">${l.id}</span>${l.active ? "" : dom` <span class="badge paused">Inactief</span>`}${l.staffSelectable ? "" : dom` <span class="badge paused">Alleen admin</span>`}</span>
           <span class="v2-row-actions">
             <button type="button" class="secondary icon-btn" data-loc-up="${i}" aria-label="${`${l.label} omhoog`}" data-disabled="${flag(i === 0)}">↑</button>
             <button type="button" class="secondary icon-btn" data-loc-down="${i}" aria-label="${`${l.label} omlaag`}" data-disabled="${flag(i === items.length - 1)}">↓</button>
             <button type="button" class="secondary" data-loc-rename="${i}">Naam</button>
+            <label class="check-row loc-staff"><input type="checkbox" data-loc-staff="${i}" data-checked="${flag(l.staffSelectable)}"> Medewerkers kunnen kiezen</label>
             <button type="button" class="secondary" data-loc-toggle="${i}">${l.active ? "Deactiveren" : "Activeren"}</button>
           </span>
         </li>`)}
@@ -1301,6 +1304,15 @@ function bindBeheer(root) {
     it.active = !it.active;
     saveLocations(list);
   });
+  root.querySelectorAll("[data-loc-staff]").forEach((box) => {
+    box.onchange = () => {
+      const list = items();
+      const it = list[Number(box.dataset.locStaff)];
+      it.staffSelectable = box.checked;
+      box.blur();
+      saveLocations(list);
+    };
+  });
   on("[data-loc-rename]", async (el) => {
     const list = items();
     const it = list[Number(el.dataset.locRename)];
@@ -1330,7 +1342,7 @@ function bindBeheer(root) {
       ctx.showToast("Maximaal 50 locaties.");
       return;
     }
-    list.push({ id: uniqueId(slugify(label), new Set(list.map((x) => x.id))), label, active: true });
+    list.push({ id: uniqueId(slugify(label), new Set(list.map((x) => x.id))), label, active: true, staffSelectable: true });
     input.value = "";
     input.blur();
     saveLocations(list);
