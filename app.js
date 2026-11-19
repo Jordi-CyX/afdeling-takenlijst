@@ -816,17 +816,16 @@ function canToggle(task) {
   return assigneeId === staff.employeeId || assigneeId === "ALLEN" || assigneeId === "";
 }
 
-// Untick only with an own taskCompletions doc; old pending tasks without a
-// doc fall back to pendingByEmployeeId == me (or a missing id, as before).
+// Untick only with an own taskCompletions doc, or (if that doc is missing)
+// a legacy pending task whose pendingByEmployeeId is exactly the signed-in
+// employee. An empty/null pendingByEmployeeId is not enough.
 function canUntick(task) {
   const staff = getCurrentStaff();
-  if (!staff || !task || task.status !== "pending") return false;
+  if (!staff || !staff.employeeId || !task || task.status !== "pending") return false;
   if (Object.prototype.hasOwnProperty.call(ownCompletions, task.id)) {
-    const mine = ownCompletions[task.id];
-    return !mine.employeeId || mine.employeeId === staff.employeeId;
+    return ownCompletions[task.id].employeeId === staff.employeeId;
   }
-  const by = task.pendingByEmployeeId != null ? String(task.pendingByEmployeeId) : "";
-  return by === "" || by === staff.employeeId;
+  return String(task.pendingByEmployeeId || "") === staff.employeeId;
 }
 
 let toggleBusy = false;
@@ -906,7 +905,12 @@ async function unmarkPending(id) {
     closeModal();
     showToast("Afvinken ongedaan gemaakt.", "success");
   } catch (err) {
-    showToast(writeErrorMessage(err), "error");
+    showToast(
+      isPermissionDenied(err)
+        ? "Alleen wie de taak afvinkte kan dit terugzetten."
+        : writeErrorMessage(err),
+      "error"
+    );
   }
 }
 
