@@ -69,7 +69,7 @@ let employees = [];
 let currentTaskId = null;
 let editingTemplateId = null;
 let editingTaskId = null;
-let knownDate = localDateKey(new Date());
+let knownDate = amsterdamDateKey(0);
 let listenersStarted = false;
 let generating = false;
 let seededOnce = false;
@@ -142,6 +142,10 @@ function dom(strings, ...values) {
         return v == null || v === false ? "" : String(v);
       }));
     }
+  }
+  // Raw-text-elementen (textarea, title, ...) kennen geen commentaar: een slot zou letterlijke tekst worden.
+  for (const el of frag.querySelectorAll("textarea, title, style, script, noscript")) {
+    if (el.textContent.includes(DOM_SLOT)) throw new Error(`dom: geen dynamische inhoud in <${el.localName}>; zet .value na het renderen`);
   }
   for (const slot of slots) slot.replaceWith(toNodes(values[Number(slot.data.slice(DOM_SLOT.length))]));
   return frag;
@@ -605,9 +609,9 @@ function isOverdue(task) {
 // en een geldige streefdatum die verstreken is (vóór vandaag) of binnenkort valt
 // (vandaag t/m vandaag + DUE_SOON_DAYS). "Vandaag" = kalenderdatum in Europe/Amsterdam.
 const DUE_SOON_DAYS = 2;
-const DUE_TIMEZONE = "Europe/Amsterdam";
+// Ook gebruikt voor audit-/herhaaldatums (K2). Geen const in de functie: wordt al bij module-start aangeroepen.
 function amsterdamDateKey(offsetDays = 0) {
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: DUE_TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Amsterdam", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const get = (t) => Number(parts.find((p) => p.type === t).value);
   const d = new Date(Date.UTC(get("year"), get("month") - 1, get("day") + offsetDays));
   return d.toISOString().slice(0, 10);
@@ -1079,7 +1083,9 @@ function setupUi() {
     localStorage.setItem(STORAGE_MIGRATED, "1");
     document.getElementById("migration-banner").classList.add("hidden");
   };
+  showAdminVersion();
   document.getElementById("add-task-form").onsubmit = submitTaskForm;
+  document.getElementById("photos").onchange = updatePhotosChosen;
   document.getElementById("task-cancel-edit").onclick = resetTaskForm;
   document.getElementById("is-recurring").onchange = updateRecurrenceVisibility;
   document.getElementById("recurrence-type").onchange = updateRecurrenceVisibility;
@@ -1108,7 +1114,7 @@ function setupUi() {
     getTasks: () => tasks,
     getRawTasks: () => rawTasks
   });
-  document.getElementById("recurrence-start").value = localDateKey(new Date());
+  document.getElementById("recurrence-start").value = amsterdamDateKey(0);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkDateChange();
   });
@@ -1145,7 +1151,7 @@ function setupServiceWorkerUpdates() {
 }
 
 function checkDateChange() {
-  const today = localDateKey(new Date());
+  const today = amsterdamDateKey(0);
   if (today !== knownDate) {
     knownDate = today;
     maybeGenerate();
@@ -1247,7 +1253,7 @@ function setSelectedWeekdays(days) {
 
 function readRecurrenceFromForm() {
   const type = document.getElementById("recurrence-type").value;
-  const startDate = document.getElementById("recurrence-start").value || localDateKey(new Date());
+  const startDate = document.getElementById("recurrence-start").value || amsterdamDateKey(0);
   const recurrence = { type, startDate };
   if (type === "weekdays") {
     recurrence.weekdays = selectedWeekdays();
@@ -1275,14 +1281,25 @@ async function submitTaskForm(event) {
   const locationId = document.getElementById("location-select").value || "";
   const urgent = document.getElementById("is-urgent").checked;
   const editingItem = editingTaskId ? tasks.find((t) => t.id === editingTaskId) : (editingTemplateId ? templates.find((t) => t.id === editingTemplateId) : null);
-  const legacyText = editingItem && !editingItem.locationId ? (editingItem.location || "") : "";
-  const location = locationId ? locationLabelById(locationId) : legacyText;
-  const locFields = locationId ? { location, locationId } : { location, locationId: deleteField() };
   if (!title) {
     showToast("Vul een titel in.");
     document.getElementById("title").focus();
     return;
   }
+  // Eigenaar 13:01: de admin kiest altijd een locatie (ook bij bewerken van een oude taak zonder locatie).
+  if (!locationId) {
+    showToast("Kies een locatie.");
+    document.getElementById("location-select").focus();
+    return;
+  }
+  // K5: de locatietekst alleen aanpassen als de locatiekeuze verandert. Een oude tekst ("koppelen")
+  // blijft staan bij een eerste koppeling; bij wisselen tussen vaste locaties wordt het label gezet.
+  const prevId = editingItem ? (editingItem.locationId || "") : "";
+  const prevText = editingItem ? (editingItem.location || "") : "";
+  const location = editingItem && locationId === prevId
+    ? prevText
+    : (editingItem && !prevId && prevText ? prevText : locationLabelById(locationId));
+  const locFields = editingItem && locationId === prevId ? {} : { location, locationId };
   const assignee = assigneeFromSelect(document.getElementById("assignee-select"));
   let photos = [];
   try {
@@ -1334,7 +1351,6 @@ async function submitTaskForm(event) {
         recurrence
       });
       assertDocSize(payload);
-      if (!locationId) payload.locationId = deleteField();
       const ok = await safeWrite(() => updateDoc(doc(db, "recurring", editingTemplateId), payload));
       if (ok) resetTaskForm();
       return;
@@ -1388,11 +1404,27 @@ async function submitTaskForm(event) {
   }
 }
 
+// Versielabel uit admin/version.js (dezelfde bron als de SW-cachenaam).
+function showAdminVersion() {
+  const el = document.getElementById("app-version");
+  const v = Number(globalThis.ZEIKLIJST_ADMIN_VERSION);
+  if (el) el.textContent = Number.isInteger(v) && v > 0 ? `admin v${v}` : "admin";
+}
+
+function updatePhotosChosen() {
+  const input = document.getElementById("photos");
+  const out = document.getElementById("photos-chosen");
+  if (!input || !out) return;
+  const n = input.files ? input.files.length : 0;
+  out.textContent = n ? `${n} ${n === 1 ? "foto" : "foto's"} gekozen` : "Geen foto gekozen";
+}
+
 function resetTaskForm() {
   editingTemplateId = null;
   editingTaskId = null;
   document.getElementById("add-task-form").reset();
-  document.getElementById("recurrence-start").value = localDateKey(new Date());
+  updatePhotosChosen();
+  document.getElementById("recurrence-start").value = amsterdamDateKey(0);
   setSelectedWeekdays([]);
   fillLocationSelect(document.getElementById("location-select"), "");
   setLegacyLocationNote("");
@@ -1407,7 +1439,7 @@ function resetTaskForm() {
 function setLegacyLocationNote(text) {
   const note = document.getElementById("location-legacy");
   if (!note) return;
-  note.textContent = text ? `Oude locatie: “${text}”. Die blijft staan tot je hierboven een vaste locatie kiest.` : "";
+  note.textContent = text ? `Oude locatie: “${text}”. Kies hierboven een vaste locatie om op te slaan; de oude tekst blijft bewaard.` : "";
   note.classList.toggle("hidden", !text);
 }
 
@@ -1432,6 +1464,7 @@ function startEditTask(id) {
   document.getElementById("is-recurring").checked = false;
   document.getElementById("is-recurring").disabled = true;
   document.getElementById("photos").value = "";
+  updatePhotosChosen();
   const count = (task.photos || []).length;
   const note = document.getElementById("photo-note");
   note.textContent = count
@@ -1460,12 +1493,13 @@ function startEditTemplate(id) {
   document.getElementById("is-recurring").disabled = true;
   const recurrence = template.recurrence || {};
   document.getElementById("recurrence-type").value = recurrence.type || "daily";
-  document.getElementById("recurrence-start").value = recurrence.startDate || localDateKey(new Date());
+  document.getElementById("recurrence-start").value = recurrence.startDate || amsterdamDateKey(0);
   document.getElementById("recurrence-date").value = recurrence.date || "";
   document.getElementById("recurrence-monthly").checked = Boolean(recurrence.monthly);
   setSelectedWeekdays(recurrence.weekdays || []);
   editingTaskId = null;
   document.getElementById("photos").value = "";
+  updatePhotosChosen();
   const count = (template.photos || []).length;
   const note = document.getElementById("photo-note");
   note.textContent = count
@@ -2385,7 +2419,7 @@ function openTask(id) {
   locationEl.textContent = location ? `${location}${task.locationId ? "" : " (niet gekoppeld)"}` : "";
   locationEl.classList.toggle("hidden", !location);
   const relocate = document.getElementById("relocate-select");
-  if (relocate) fillLocationSelect(relocate, task.locationId || "", { noneLabel: task.location && !task.locationId ? `Niet gekoppeld (${task.location})` : "Geen locatie" });
+  if (relocate) fillLocationSelect(relocate, task.locationId || "", { placeholder: task.location && !task.locationId ? `Niet gekoppeld (${task.location})` : "Kies een locatie" });
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + adminAssigneeLabel(task);
   const status = safeStatus(task.status);
   const statusBadges = [dom`<span class="badge ${status}">${status === "open" ? "Open" : status === "pending" ? "Pending" : "Afgerond"}</span>`];
@@ -2597,9 +2631,12 @@ async function relocateCurrentTask() {
   const task = tasks.find((item) => item.id === currentTaskId);
   if (!task) return;
   const id = document.getElementById("relocate-select").value || "";
-  const update = id
-    ? { locationId: id, ...(task.locationId || !task.location ? { location: locationLabelById(id) } : {}) }
-    : { locationId: deleteField() };
+  if (!id) {
+    showToast("Kies een locatie.");
+    return;
+  }
+  if (id === (task.locationId || "")) return;
+  const update = { locationId: id, ...(task.locationId || !task.location ? { location: locationLabelById(id) } : {}) };
   if (await safeWrite(() => updateDoc(doc(db, "tasks", currentTaskId), update))) showToast("Locatie opgeslagen.", "ok");
 }
 

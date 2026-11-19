@@ -29,6 +29,7 @@
   }
 }
   </script>
+  <script src="version.js?v=26"></script>
   <link rel="manifest" href="manifest.webmanifest?v=26">
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=26">
   <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=26">
@@ -229,12 +230,12 @@
         <input type="text" id="title" placeholder="Titel" required autocomplete="off">
         <label>
           Locatie
-          <select id="location-select"><option value="">Geen locatie</option></select>
+          <select id="location-select" required><option value="" disabled selected>Kies een locatie</option></select>
         </label>
         <p id="location-legacy" class="pin-meta hidden"></p>
-        <label class="check-row">
-          <input type="checkbox" id="is-urgent">
-          Spoed (bovenaan bij medewerkers)
+        <label class="check-row urgent-toggle">
+          <input type="checkbox" id="is-urgent" role="switch">
+          <span class="urgent-text"><strong>Spoed</strong> <span>bovenaan bij medewerkers</span></span>
         </label>
         <label id="due-date-wrap">
           Streefdatum (optioneel)
@@ -249,7 +250,8 @@
         </label>
         <label class="file-label">
           Foto's (optioneel, max. 4)
-          <input type="file" id="photos" accept="image/*" multiple>
+          <input type="file" id="photos" class="file-input-hidden" accept="image/*" multiple>
+          <span class="file-pick"><span class="file-pick-btn" aria-hidden="true">Foto's kiezen</span> <span id="photos-chosen" class="file-chosen">Geen foto gekozen</span></span>
         </label>
         <p id="photo-note" class="section-intro hidden">Bestaande foto's blijven bewaard als je geen nieuwe kiest.</p>
         <label class="check-row">
@@ -257,6 +259,7 @@
           Herhalende taak
         </label>
         <div id="recurrence-fields" class="recurrence-fields hidden">
+          <p class="section-intro">Een herhaalde taak verschijnt op de dag zelf, zodra iemand die dag de app opent.</p>
           <label>
             Herhaling
             <select id="recurrence-type">
@@ -485,6 +488,7 @@
       </div>
     </div>
   </div>
+  <footer class="app-version-bar"><span id="app-version" class="app-version">admin</span></footer>
   <div id="app-toast" class="app-toast hidden" role="status"></div>
   <div id="print-view" class="print-view" aria-hidden="true"></div>
 

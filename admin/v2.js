@@ -18,7 +18,8 @@ import {
   serverTimestamp,
   deleteField
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
-import { db, localDateKey, formatDate, formatDateTime } from "../shared.js";
+import { db, localDateKey, amsterdamDateKey, formatDate, formatDateTime } from "../shared.js";
+import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js";
 import { AUDIT_SETTINGS, LOCATION_PLACEHOLDER, DEFAULT_LOCATIONS, defaultAuditSections } from "./audit-defaults.js";
 
 let ctx = null;
@@ -48,6 +49,12 @@ export function initV2(context) {
 }
 
 export function startV2Listeners() {
+  // K3: niet-bewaarde audit-antwoorden direct wegschrijven als de app naar de achtergrond gaat.
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushDraft(); });
+  window.addEventListener("pagehide", flushDraft);
+  window.addEventListener("offline", () => {
+    if (draft) ctx.showToast("Geen verbinding: je antwoorden blijven op dit toestel en worden verstuurd zodra je weer online bent.");
+  });
   onSnapshot(doc(db, "settings", "locations"), (snap) => {
     locationsDoc = snap.exists() ? normalizeLocationsDoc(snap.data()) : null;
     locationsReady = true;
@@ -64,6 +71,7 @@ export function startV2Listeners() {
   }, noop);
   onSnapshot(query(collection(db, "audits"), where("status", "==", "bezig"), limit(1)), (snap) => {
     activeAuditDoc = snap.empty ? null : { id: snap.docs[0].id, data: snap.docs[0].data() };
+    if (!snap.empty) checkRemoteDraft(snap.docs[0]);
     if (!activeAuditDoc && draft && !finishing) {
       draft = null;
       auditMode = "start";
@@ -180,20 +188,23 @@ function saveConfig(sections, prevVersion) {
   return ctx.safeWrite(() => setDoc(doc(db, "auditConfig", "current"), { version: (prevVersion || 0) + 1, updatedAt: serverTimestamp(), sections: clean }));
 }
 
-// Vult een <select> met actieve locaties (+ "Geen locatie" voor de admin).
-export function fillLocationSelect(select, currentId = "", { includeNone = true, noneLabel = "Geen locatie" } = {}) {
+// Vult een <select> met actieve locaties. Eigenaar 13:01: de admin kiest altijd een locatie, dus standaard
+// een niet-kiesbare placeholder "Kies een locatie" in plaats van "Geen locatie".
+export function fillLocationSelect(select, currentId = "", { placeholder = "Kies een locatie", noneLabel = "" } = {}) {
   if (!select) return;
   const opts = [];
-  if (includeNone) opts.push(["", noneLabel]);
+  if (noneLabel) opts.push(["", noneLabel, false]);
+  else if (placeholder) opts.push(["", placeholder, true]);
   for (const loc of activeLocations()) opts.push([loc.id, loc.label]);
   if (currentId && !opts.some(([v]) => v === currentId)) {
     const label = locationLabelById(currentId) || currentId;
     opts.push([currentId, `${label} (inactief)`]);
   }
-  select.replaceChildren(...opts.map(([v, l]) => {
+  select.replaceChildren(...opts.map(([v, l, disabled]) => {
     const o = document.createElement("option");
     o.value = v;
     o.textContent = l;
+    if (disabled) o.disabled = true;
     return o;
   }));
   select.value = currentId || "";
@@ -256,21 +267,31 @@ export async function migratePendingBy() {
   if (done) ctx.showToast(`${list.length} afvinkers verplaatst.`, "ok");
 }
 
-// Noodknop (terugval): legacy-afvinkers weer op de taak zetten.
+// Noodknop (terugval, review I1): ALLE afvinkers (verplaatst én nieuw via v20 afgevinkt) weer op de
+// taak zetten, zodat de oude app (v25) na terugdraaien ziet wie wat heeft afgevinkt.
+// Alleen voor taken die nog bestaan en niet 'open' zijn; taskCompletions-documenten worden daarna verwijderd.
+export function restorableCompletions() {
+  const tasksById = new Map(ctx.getRawTasks().map((t) => [t.id, t]));
+  return [...completions.entries()].filter(([id]) => {
+    const t = tasksById.get(id);
+    return t && t.status !== "open";
+  });
+}
+
 export async function restorePendingBy() {
-  const legacy = [...completions.entries()].filter(([, c]) => c.legacy);
-  if (!legacy.length) {
-    ctx.showToast("Geen verplaatste afvinkers gevonden.", "ok");
+  const list = restorableCompletions();
+  if (!list.length) {
+    ctx.showToast("Geen afvinkers gevonden om terug te zetten.", "ok");
     return;
   }
-  const ok = await ctx.confirmAction(`Noodknop: ${legacy.length} verplaatste afvinkers terugzetten op de taken? Alleen gebruiken als je teruggaat naar de oude app en regels.`, { title: "Terugzetten", confirmText: "Terugzetten", danger: true });
+  const legacyCount = list.filter(([, c]) => c.legacy).length;
+  const ok = await ctx.confirmAction(`Noodknop: ${list.length} afvinkers terugzetten op de taken (${legacyCount} verplaatst, ${list.length - legacyCount} nieuw)? Alleen gebruiken als je teruggaat naar de oude app en regels. Eerst wordt een ruwe back-up gedownload.`, { title: "Terugzetten", confirmText: "Back-up en terugzetten", danger: true });
   if (!ok) return;
-  const taskIds = new Set(ctx.getRawTasks().map((t) => t.id));
+  if (!(await exportRawBackup())) return;
   const done = await ctx.safeWrite(async () => {
     let batch = writeBatch(db);
     let n = 0;
-    for (const [id, c] of legacy) {
-      if (!taskIds.has(id)) continue;
+    for (const [id, c] of list) {
       batch.update(doc(db, "tasks", id), { pendingBy: c.name || null, pendingByEmployeeId: c.employeeId || null, pendingAt: c.at || null });
       batch.delete(doc(db, "taskCompletions", id));
       n += 2;
@@ -282,7 +303,7 @@ export async function restorePendingBy() {
     }
     if (n) await batch.commit();
   });
-  if (done) ctx.showToast("Afvinkers teruggezet.", "ok");
+  if (done) ctx.showToast(`${list.length} afvinkers teruggezet.`, "ok");
 }
 
 // ---------- Ruwe back-up ----------
@@ -333,6 +354,37 @@ export async function exportRawBackup() {
     return true;
   } catch {
     ctx.showToast("Back-up maken is mislukt.");
+    return false;
+  }
+}
+
+// ---------- Excel-export (alleen-lezen, eigenaar 13:16) ----------
+// Alleen collecties met een vaste kolomlijst; geheimen (staffAccounts, startCodes, nameIndex, pins) worden niet eens gelezen.
+const EXCEL_COLLECTIONS = ["tasks", "taskMeta", "taskCompletions", "recurring", "employees", "employeeDetails", "reports", "audits"];
+export async function exportExcel() {
+  try {
+    const data = {};
+    for (const name of EXCEL_COLLECTIONS) {
+      try {
+        const snap = await getDocs(collection(db, name));
+        data[name] = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
+      } catch {
+        data[name] = [];
+      }
+    }
+    const sheets = buildExportSheets(data, { locationLabel: (id) => locationLabelById(id), auditTotal });
+    const blob = new Blob([buildXlsx(sheets)], { type: XLSX_MIME });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `zeiklijst-export-${amsterdamDateKey()}.xlsx`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    ctx.showToast("Excel-export gedownload.", "ok");
+    return true;
+  } catch {
+    ctx.showToast("Excel-export maken is mislukt.");
     return false;
   }
 }
@@ -423,8 +475,8 @@ function describeAnswer(q) {
 
 function taskPayload(t) {
   const q = t.question;
+  // Eigenaar 13:01: audit-notities alleen in de audit en de PDF, niet in de taak (die lezen alle medewerkers).
   const lines = [`Audit ${formatDate(t.auditDate)} · ${t.label}`, describeAnswer(q)];
-  if (q.note) lines.push(`Notitie: ${q.note}`);
   const source = { type: "audit", auditId: t.auditId, auditDate: t.auditDate, locationId: t.locationId, questionId: t.questionId };
   if (t.reasonId) source.reasonId = t.reasonId;
   return {
@@ -481,18 +533,56 @@ function draftFromDoc(id, data) {
   };
 }
 
+// Stabiele JSON (gesorteerde sleutels), om de eigen versie met die uit Firestore te vergelijken.
+function stableJson(v) {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(",")}}`;
+  return JSON.stringify(v === undefined ? null : v);
+}
+let lastSavedJson = null; // secties zoals dit toestel ze het laatst bewaarde of laadde
+let savePending = false;
+
 function scheduleSave(immediate = false) {
   if (!draft) return;
   clearTimeout(draftSaveTimer);
-  const run = () => saveDraft().catch(() => ctx.showToast("Bewaren van de audit is mislukt. Probeer het opnieuw."));
+  savePending = true;
+  const run = () => {
+    savePending = false;
+    saveDraft().catch(() => ctx.showToast("Bewaren van de audit is mislukt. Probeer het opnieuw."));
+  };
   if (immediate) run();
-  else draftSaveTimer = setTimeout(run, 800);
+  else draftSaveTimer = setTimeout(run, 600);
+}
+
+function flushDraft() {
+  if (savePending) scheduleSave(true);
 }
 
 async function saveDraft() {
   if (!draft || finishing) return;
   const { id, ...rest } = draft;
-  await setDoc(doc(db, "audits", id), { ...rest, status: "bezig", updatedAt: serverTimestamp() });
+  lastSavedJson = stableJson(draft.sections);
+  // Zonder verbinding komt de write in de wachtrij van Firestore; niet wachten op de server.
+  const p = setDoc(doc(db, "audits", id), { ...rest, status: "bezig", updatedAt: serverTimestamp() });
+  if (!navigator.onLine) return;
+  await p;
+}
+
+// K3: is de lopende audit op een ander apparaat gewijzigd? Dan de nieuwste versie laden en waarschuwen.
+function checkRemoteDraft(snapDoc) {
+  if (!draft || finishing || !snapDoc || draft.id !== snapDoc.id) return;
+  if (snapDoc.metadata && snapDoc.metadata.hasPendingWrites) return;
+  const remote = snapDoc.data();
+  const remoteJson = stableJson(remote.sections || []);
+  if (lastSavedJson === null || remoteJson === lastSavedJson) return;
+  if (savePending) {
+    ctx.showToast("Let op: deze audit is ook op een ander apparaat gewijzigd. Jouw laatste antwoorden worden bewaard.");
+    return;
+  }
+  draft.sections = JSON.parse(JSON.stringify(remote.sections || []));
+  lastSavedJson = remoteJson;
+  auditPos = Math.min(auditPos, Math.max(0, draft.sections.length - 1));
+  ctx.showToast("Deze audit is op een ander apparaat bijgewerkt; de nieuwste versie staat nu hier.");
 }
 
 function storePos() {
@@ -518,6 +608,11 @@ function applyFlags(root) {
   root.querySelectorAll('[data-open="1"]').forEach((el) => { el.open = true; });
   root.querySelectorAll('[data-checked="1"]').forEach((el) => { el.checked = true; });
   root.querySelectorAll('[data-selected="1"]').forEach((el) => { el.selected = true; });
+  // B1: tekst in een <textarea> nooit via de template (raw text), maar via .value.
+  root.querySelectorAll("textarea[data-initial]").forEach((el) => {
+    el.value = el.getAttribute("data-initial");
+    el.removeAttribute("data-initial");
+  });
 }
 const flag = (b) => (b ? "1" : "");
 
@@ -536,7 +631,7 @@ async function startAudit() {
     return;
   }
   const ref = doc(collection(db, "audits"));
-  draft = { id: ref.id, status: "bezig", auditDate: localDateKey(new Date()), startedAt: Timestamp.now(), configVersion: auditConfig.version, sections };
+  draft = { id: ref.id, status: "bezig", auditDate: amsterdamDateKey(), startedAt: Timestamp.now(), configVersion: auditConfig.version, sections };
   auditPos = 0;
   auditMode = "run";
   storePos();
@@ -551,7 +646,10 @@ async function startAudit() {
 
 function resumeAudit() {
   if (!activeAuditDoc) return;
-  if (!draft || draft.id !== activeAuditDoc.id) draft = draftFromDoc(activeAuditDoc.id, activeAuditDoc.data);
+  if (!draft || draft.id !== activeAuditDoc.id) {
+    draft = draftFromDoc(activeAuditDoc.id, activeAuditDoc.data);
+    lastSavedJson = stableJson(draft.sections);
+  }
   restorePos();
   auditMode = "run";
   storePos();
@@ -599,6 +697,9 @@ async function finishAudit() {
     notesCount,
     score
   };
+  // K4: zonder verbinding wacht Firestore met bevestigen tot het weer online is.
+  if (!navigator.onLine) ctx.showToast("Geen verbinding: de audit en de taken worden verstuurd zodra je weer online bent. Laat de app open.");
+  const slowTimer = setTimeout(() => ctx.showToast("Nog niet verstuurd: wacht op verbinding. Laat de app open; het gaat vanzelf verder."), 6000);
   const done = await ctx.safeWrite(async () => {
     const todo = list.filter((t) => !existing.has(t.id)); // herhaalpoging: geen dubbele taken
     let batch = writeBatch(db);
@@ -615,6 +716,7 @@ async function finishAudit() {
     batch.set(doc(db, "audits", id), finalDoc); // laatste batch: audit pas daarna "afgerond"
     await batch.commit();
   });
+  clearTimeout(slowTimer);
   finishing = false;
   if (!done) return;
   localStorage.removeItem(AUDIT_POS_KEY);
@@ -755,7 +857,7 @@ function questionCard(q, qi, s) {
       ${tasks.length ? dom`<ul class="audit-task-preview">${tasks.map((t) => dom`<li>Taak: ${t.title}</li>`)}</ul>` : ""}
       <details class="audit-note" data-open="${flag(q.note)}">
         <summary>${q.note ? "Notitie" : "Notitie toevoegen"}</summary>
-        <textarea rows="2" maxlength="${AUDIT_SETTINGS.noteMax}" data-note aria-label="Notitie bij deze vraag">${q.note || ""}</textarea>
+        <textarea rows="2" maxlength="${AUDIT_SETTINGS.noteMax}" data-note aria-label="Notitie bij deze vraag" data-initial="${q.note || ""}"></textarea>
       </details>
     </div>`;
 }
@@ -770,14 +872,14 @@ function bindRun(root, s) {
           if (q.followUp) q.followUpAnswer = null;
           if (q.reasons) q.reasonIds = [];
         }
-        scheduleSave();
+        scheduleSave(true);
         renderAudit();
       };
     });
     card.querySelectorAll("[data-fans]").forEach((btn) => {
       btn.onclick = () => {
         q.followUpAnswer = btn.dataset.fans;
-        scheduleSave();
+        scheduleSave(true);
         renderAudit();
       };
     });
@@ -791,7 +893,7 @@ function bindRun(root, s) {
           cur.add(id);
         }
         q.reasonIds = q.reasons.map((r) => r.id).filter((x) => cur.has(x));
-        scheduleSave();
+        scheduleSave(true);
         renderAudit();
       };
     });
@@ -801,7 +903,10 @@ function bindRun(root, s) {
         q.note = note.value.slice(0, AUDIT_SETTINGS.noteMax);
         scheduleSave();
       };
-      note.onblur = () => setTimeout(renderAudit, 0);
+      note.onblur = () => {
+        scheduleSave(true);
+        setTimeout(renderAudit, 0);
+      };
     }
   });
   const go = (pos, mode = "run") => {
@@ -1225,7 +1330,7 @@ function questionEditor(q, si, qi) {
         <label>Taaktekst <input type="text" name="fuTask" maxlength="120" value="${(q.followUp && q.followUp.taskText) || ""}"></label>
       </fieldset>
       <label data-kind="reasons">Keuzes (één per regel: Keuze | taaktekst)
-        <textarea name="reasons" rows="4">${reasonsText}</textarea>
+        <textarea name="reasons" rows="4" data-initial="${reasonsText}"></textarea>
       </label>
       <p class="form-error hidden" data-q-error></p>
       <div class="form-actions">
@@ -1502,19 +1607,24 @@ function renderDataV2() {
   if (!root) return;
   const { dom } = ctx;
   const legacy = legacyPendingTasks().length;
-  const moved = [...completions.values()].filter((c) => c.legacy).length;
+  const moved = restorableCompletions().length;
   root.replaceChildren(dom`
     <h3>Volledige back-up (ruw)</h3>
     <p class="section-intro">Download alle gegevens zoals ze in de database staan: taken, streefdatums, afgerond-door, herhalingen, medewerkers, extra gegevens, meldingen, locaties, vragenlijst en audits. Bewaar dit bestand vóór elke grote wijziging. Startcodes zitten er niet in.</p>
     <div class="form-actions"><button type="button" data-raw-backup>Volledige back-up downloaden</button></div>
+    <h3>Excel-export</h3>
+    <p class="section-intro">Overzicht om te lezen of te delen (niet om terug te zetten): tabbladen Taken, Audits, Medewerkers (met extra gegevens), Meldingen en Terugkerende taken. Zonder pincodes, startcodes of andere inloggegevens, en zonder foto's.</p>
+    <div class="form-actions"><button type="button" class="secondary" data-excel-export>Excel-export (.xlsx)</button></div>
     <h3>Afvinkers verplaatsen (eenmalig)</h3>
     <p class="section-intro">Wie een taak afvinkte, stond tot nu toe op de taak zelf (zichtbaar voor medewerkers). Vanaf deze versie staat dat in een lijst die alleen de admin ziet. ${legacy ? `Nog ${legacy} taken met een oude afvinker.` : "Er staan geen oude afvinkers meer op taken."}</p>
     <div class="form-actions">
       <button type="button" data-migrate-pending data-disabled="${flag(!legacy)}">Back-up + afvinkers verplaatsen</button>
       <button type="button" class="secondary" data-restore-pending data-disabled="${flag(!moved)}">Noodknop: terugzetten (${moved})</button>
-    </div>`);
+    </div>
+    <p class="section-intro">Noodknop alleen bij teruggaan naar de oude app: zet van álle afgevinkte taken (ook die na de overstap zijn afgevinkt) de naam en tijd weer op de taak, zodat de oude app ze toont.</p>`);
   applyFlags(root);
   root.querySelector("[data-raw-backup]").onclick = () => exportRawBackup();
+  root.querySelector("[data-excel-export]").onclick = () => exportExcel();
   root.querySelector("[data-migrate-pending]").onclick = () => migratePendingBy();
   root.querySelector("[data-restore-pending]").onclick = () => restorePendingBy();
 }

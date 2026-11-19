@@ -1,4 +1,5 @@
-const CACHE_NAME = "zeiklijst-admin-v26";
+importScripts("./version.js"); // één bron voor de versie (ook het label in de app)
+const CACHE_NAME = `zeiklijst-admin-v${self.ZEIKLIJST_ADMIN_VERSION}`;
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
@@ -6,6 +7,8 @@ const ASSETS = [
   "./admin.js",
   "./v2.js",
   "./audit-defaults.js",
+  "./version.js",
+  "./xlsx-export.js",
   "./admin.css",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
