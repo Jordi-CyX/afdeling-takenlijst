@@ -9,7 +9,7 @@ import {
   normalizeTemplate,
   normalizeEmployee,
   formatDateTime,
-  localDateKey,
+  amsterdamDateKey,
   normalizeName,
   compressImage,
   isSafeImageDataUrl
@@ -30,7 +30,7 @@ let ownEmployee = null;
 let locationSettings = null;
 let ownCompletions = {};
 let currentTaskId = null;
-let knownDate = localDateKey(new Date());
+let knownDate = amsterdamDateKey();
 let listenersStarted = false;
 let generating = false;
 let toastTimer = 0;
@@ -242,7 +242,6 @@ function setFilter(value) {
 }
 
 // Staff display/filter: empty, null, missing or ALLEN is shown as Allen.
-// shared.js still labels tasks without a person differently; wrap it here.
 function isAllen(task) {
   if (!task) return true;
   const id = task.assigneeId == null ? "" : String(task.assigneeId).trim();
@@ -537,7 +536,7 @@ function setupLightbox() {
 }
 
 function checkDateChange() {
-  const today = localDateKey(new Date());
+  const today = amsterdamDateKey();
   if (today !== knownDate) {
     knownDate = today;
     maybeGenerate();
