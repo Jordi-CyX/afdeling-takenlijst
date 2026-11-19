@@ -13,6 +13,12 @@
 // - L1: streefdatum in taskMeta/{taskId} (alleen admin + reader).
 // - L2: afvinken alleen eigen taak, "Allen" of niet toegewezen; terugzetten alleen door wie afvinkte.
 // - L3: medewerkers lezen alleen hun eigen employees-doc (geen lijst).
+// STAP 4 (hercontrole 19-11-2026)
+// - M2/N3: resetverzoek alleen samen met pinResetLimits/{uid} (10 min per uid) en
+//   pinResetLimits/_global (60 s en max. 20 per dag voor iedereen samen) in dezelfde batch.
+// - M3: eigen taken en meldingen alleen samen met staffDailyCounters/{employeeId} in dezelfde
+//   batch: max. 10 eigen taken en 5 meldingen per dag per medewerker, 15 s tussen verzendingen.
+//   Dag = kalenderdag in UTC+1 (Amsterdamse wintertijd; in de zomer wisselt de dag om 01:00).
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -270,7 +276,7 @@ service cloud.firestore {
       allow read: if isAdmin() || isValidStaff() || isReader();
       allow create: if isAdmin()
         || (isValidStaff() && isValidRecurringInstance(taskId))
-        || (isValidStaff() && isValidStaffTaskCreate());
+        || (isValidStaff() && isValidStaffTaskCreate() && counterBumpedFor("task", taskId));
       allow update: if isAdmin() || (isValidStaff() && isStatusToggle());
       allow delete: if isAdmin();
     }
@@ -360,11 +366,175 @@ service cloud.firestore {
         && after.pinVersion == resource.data.pinVersion;
     }
 
-    // M2: verzoek met willekeurig id (bijv. addDoc), alleen aanmaken, nooit overschrijven.
-    // De admin koppelt de naam zelf aan een medewerker. (Geen rate-limit mogelijk in regels.)
+    // M2: verzoek met willekeurig id, alleen aanmaken, nooit overschrijven.
+    // De admin koppelt de naam zelf aan een medewerker.
+    // M2/N3 (stap 4): alleen in een batch die ook pinResetLimits/{uid} en pinResetLimits/_global
+    // bijwerkt (wachttijd, zie isValidPinResetLimitWrite).
     match /pinResetRequests/{requestId} {
       allow read, delete: if isAdmin();
-      allow create: if isSignedIn() && isValidPinResetCreate(requestId);
+      allow create: if isSignedIn() && isValidPinResetCreate(requestId) && resetLimitsBumpedFor(requestId);
+    }
+
+    // Wachttijd tussen resetverzoeken (servertijd, dus geen last van verkeerde klokken).
+    function pinResetUidCooldown() {
+      return duration.value(600, "s");
+    }
+
+    function pinResetGlobalCooldown() {
+      return duration.value(60, "s");
+    }
+
+    function pinResetLimitPath(limitId) {
+      return /databases/$(database)/documents/pinResetLimits/$(limitId);
+    }
+
+    function pinResetRequestPath(requestId) {
+      return /databases/$(database)/documents/pinResetRequests/$(requestId);
+    }
+
+    function limitPointsTo(limitId, requestId) {
+      return existsAfter(pinResetLimitPath(limitId))
+        && getAfter(pinResetLimitPath(limitId)).data.lastAt == request.time
+        && getAfter(pinResetLimitPath(limitId)).data.requestId == requestId;
+    }
+
+    function resetLimitsBumpedFor(requestId) {
+      return limitPointsTo(request.auth.uid, requestId) && limitPointsTo("_global", requestId);
+    }
+
+    function pinResetGlobalPerDay() {
+      return 20;
+    }
+
+    // Gedeeld door beide limietdocs: koppeling aan precies dit nieuwe verzoek, servertijd.
+    function isLimitBoundToNewRequest(data) {
+      return data.lastAt == request.time
+        && data.requestId is string
+        && data.requestId.matches("^[A-Za-z0-9]{16,40}$")
+        && !exists(pinResetRequestPath(data.requestId))
+        && existsAfter(pinResetRequestPath(data.requestId));
+    }
+
+    // pinResetLimits/{uid} = { lastAt: serverTimestamp(), requestId }. Pas na 600 s opnieuw.
+    function isValidPinResetUidLimitWrite(limitId) {
+      let data = request.resource.data;
+      return limitId == request.auth.uid
+        && data.keys().hasOnly(["lastAt", "requestId"])
+        && data.keys().hasAll(["lastAt", "requestId"])
+        && isLimitBoundToNewRequest(data)
+        && (resource == null || resource.data.lastAt + pinResetUidCooldown() <= request.time);
+    }
+
+    // pinResetLimits/_global = { lastAt: serverTimestamp(), requestId, day: int, count: int }.
+    // Voor alle aanvragers samen: pas na 60 s opnieuw en max. 20 per dag (dag zoals staffDayNumber).
+    function isValidPinResetGlobalLimitWrite() {
+      let data = request.resource.data;
+      let today = staffDayNumber();
+      let prevCount = (resource != null && resource.data.get("day", -1) == today)
+        ? resource.data.get("count", 0) : 0;
+      return data.keys().hasOnly(["lastAt", "requestId", "day", "count"])
+        && data.keys().hasAll(["lastAt", "requestId", "day", "count"])
+        && isLimitBoundToNewRequest(data)
+        && data.day is int
+        && data.day == today
+        && data.count is int
+        && data.count == prevCount + 1
+        && data.count <= pinResetGlobalPerDay()
+        && (resource == null || resource.data.lastAt + pinResetGlobalCooldown() <= request.time);
+    }
+
+    function isValidPinResetLimitWrite(limitId) {
+      return isSignedIn()
+        && (limitId == "_global" ? isValidPinResetGlobalLimitWrite() : isValidPinResetUidLimitWrite(limitId));
+    }
+
+    match /pinResetLimits/{limitId} {
+      allow get: if isAdmin() || (isSignedIn() && (limitId == request.auth.uid || limitId == "_global"));
+      allow list, delete: if isAdmin();
+      allow create, update: if isAdmin() || isValidPinResetLimitWrite(limitId);
+    }
+
+    // M3 (stap 4): dagteller per medewerker voor eigen taken en meldingen.
+    // staffDailyCounters/{employeeId} = { day: int, tasks: int, reports: int, lastAt: timestamp,
+    //   lastType: "task" | "report", lastId: string }
+    function maxStaffTasksPerDay() {
+      return 10;
+    }
+
+    function maxStaffReportsPerDay() {
+      return 5;
+    }
+
+    function staffSubmitCooldown() {
+      return duration.value(15, "s");
+    }
+
+    // Dagnummer = floor((ms sinds 1970 + 1 uur) / 1 dag): kalenderdag in UTC+1.
+    function staffDayNumber() {
+      return math.floor((request.time.toMillis() + 3600000) / 86400000);
+    }
+
+    function staffCounterPath(employeeId) {
+      return /databases/$(database)/documents/staffDailyCounters/$(employeeId);
+    }
+
+    function collectionDocPath(kind, docId) {
+      return kind == "task"
+        ? /databases/$(database)/documents/tasks/$(docId)
+        : /databases/$(database)/documents/reports/$(docId);
+    }
+
+    // Aan te roepen bij het aanmaken van een taak/melding: de teller in dezelfde batch wijst ernaar.
+    function counterBumpedFor(kind, docId) {
+      let path = staffCounterPath(staffEmployeeId());
+      return existsAfter(path)
+        && getAfter(path).data.lastAt == request.time
+        && getAfter(path).data.lastType == kind
+        && getAfter(path).data.lastId == docId;
+    }
+
+    function isValidCounterWrite(employeeId) {
+      let data = request.resource.data;
+      let today = staffDayNumber();
+      let isNew = resource == null;
+      let sameDay = !isNew && resource.data.get("day", -1) == today;
+      let prevTasks = sameDay ? resource.data.get("tasks", 0) : 0;
+      let prevReports = sameDay ? resource.data.get("reports", 0) : 0;
+      return isValidStaff()
+        && staffEmployeeId() == employeeId
+        && data.keys().hasOnly(["day", "tasks", "reports", "lastAt", "lastType", "lastId"])
+        && data.keys().hasAll(["day", "tasks", "reports", "lastAt", "lastType", "lastId"])
+        && data.day is int
+        && data.day == today
+        && data.tasks is int
+        && data.reports is int
+        && data.lastAt == request.time
+        && (isNew || resource.data.lastAt + staffSubmitCooldown() <= request.time)
+        && data.lastId is string
+        && data.lastId.matches("^[A-Za-z0-9]{16,40}$")
+        && data.lastType in ["task", "report"]
+        && (
+          (
+            data.lastType == "task"
+            && data.tasks == prevTasks + 1
+            && data.reports == prevReports
+            && data.tasks <= maxStaffTasksPerDay()
+          )
+          || (
+            data.lastType == "report"
+            && data.reports == prevReports + 1
+            && data.tasks == prevTasks
+            && data.reports <= maxStaffReportsPerDay()
+          )
+        )
+        && !exists(collectionDocPath(data.lastType, data.lastId))
+        && existsAfter(collectionDocPath(data.lastType, data.lastId));
+    }
+
+    match /staffDailyCounters/{employeeId} {
+      allow get: if isAdmin() || (isValidStaff() && staffEmployeeId() == employeeId);
+      allow list, delete: if isAdmin();
+      allow create, update: if isAdmin() || isValidCounterWrite(employeeId);
     }
 
     function isValidPinResetCreate(requestId) {
@@ -407,7 +577,7 @@ service cloud.firestore {
 
     match /reports/{reportId} {
       allow read, update, delete: if isAdmin();
-      allow create: if isValidStaff() && isValidReportCreate();
+      allow create: if isValidStaff() && isValidReportCreate() && counterBumpedFor("report", reportId);
     }
   }
 }
