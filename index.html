@@ -147,7 +147,6 @@
       <button type="button" class="chip" data-filter="all">Alles</button>
       <button type="button" class="chip" data-filter="mine">Mijn taken</button>
       <button type="button" class="chip" data-filter="allen">Allen</button>
-      <button type="button" class="chip" data-filter="unassigned">Niet toegewezen</button>
       <button type="button" class="chip" data-filter="pending">Ter controle</button>
     </div>
     <div class="location-filter-row">
@@ -218,7 +217,13 @@
           <input type="file" id="add-task-photo" name="photo" accept="image/jpeg,image/png,image/webp,image/heic,image/heif">
         </label>
         <div id="add-task-photo-preview" class="photo-preview hidden"></div>
-        <p class="assignee-fixed">Toegewezen aan: <strong id="add-task-assignee"></strong></p>
+        <fieldset class="assignee-choice">
+          <legend>Toegewezen aan</legend>
+          <div id="add-task-assignee-choice" class="assignee-segments" role="radiogroup" aria-label="Toegewezen aan">
+            <button type="button" class="assignee-segment is-active" role="radio" aria-checked="true" tabindex="0" data-assignee="self" id="add-task-assignee-self">Mijzelf</button>
+            <button type="button" class="assignee-segment" role="radio" aria-checked="false" tabindex="-1" data-assignee="allen" id="add-task-assignee-allen">Allen</button>
+          </div>
+        </fieldset>
         <p id="add-task-error" class="form-error hidden"></p>
         <div class="form-actions">
           <button type="submit">Toevoegen</button>

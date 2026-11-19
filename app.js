@@ -9,7 +9,6 @@ import {
   normalizeTemplate,
   normalizeEmployee,
   formatDateTime,
-  assigneeLabel,
   localDateKey,
   normalizeName,
   compressImage,
@@ -39,7 +38,7 @@ let toastTimer = 0;
 const VIEW_KEY = "zeiklijst-view";
 const FILTER_KEY = "zeiklijst-filter";
 const LOCATION_FILTER_KEY = "zeiklijst-location-filter";
-const FILTERS = new Set(["all", "mine", "allen", "unassigned", "pending"]);
+const FILTERS = new Set(["all", "mine", "allen", "pending"]);
 const LOCATION_UNSET_MSG = "Locatielijst nog niet ingesteld, vraag de beheerder";
 
 const TITLE_MAX = 120;
@@ -182,7 +181,8 @@ function isRecurring(task) {
 }
 
 function currentFilter() {
-  const value = localStorage.getItem(FILTER_KEY) || "mine";
+  let value = localStorage.getItem(FILTER_KEY) || "mine";
+  if (value === "unassigned") value = "allen";
   return FILTERS.has(value) ? value : "mine";
 }
 
@@ -192,12 +192,19 @@ function setFilter(value) {
   renderTasks();
 }
 
+// Staff display/filter: empty, null, missing or ALLEN is shown as Allen.
+// shared.js still labels tasks without a person differently; wrap it here.
 function isAllen(task) {
-  return task.assigneeId === "ALLEN" || (task.assigneeName || "").trim().toLowerCase() === "allen";
+  if (!task) return true;
+  const id = task.assigneeId == null ? "" : String(task.assigneeId).trim();
+  if (!id || id === "ALLEN") return true;
+  return (task.assigneeName || "").trim().toLowerCase() === "allen";
 }
 
-function isUnassigned(task) {
-  return !isAllen(task) && !(task.assigneeName || "").trim();
+function staffAssigneeLabel(task) {
+  if (isAllen(task)) return "Allen";
+  const name = (task && task.assigneeName || "").trim();
+  return name || "Allen";
 }
 
 function isMine(task) {
@@ -215,7 +222,6 @@ function matchesFilter(task, filter) {
   if (filter === "all") return true;
   if (filter === "pending") return task.status === "pending";
   if (filter === "allen") return isAllen(task);
-  if (filter === "unassigned") return isUnassigned(task);
   if (filter === "mine") return isMine(task);
   return true;
 }
@@ -661,8 +667,7 @@ function rejectionByLabel(by) {
 function taskItemElement(task) {
   const location = taskLocationText(task);
   const origin = auditOriginText(task);
-  const assignee = assigneeLabel(task);
-  const unassigned = assignee === "Niet toegewezen";
+  const assignee = staffAssigneeLabel(task);
   const age = formatRelativeAge(task.createdAt);
 
   const item = el("div", "task-item");
@@ -687,7 +692,7 @@ function taskItemElement(task) {
     row.append(...badges);
     main.append(row);
   }
-  item.append(main, el("div", "task-assignee" + (unassigned ? " is-muted" : ""), assignee));
+  item.append(main, el("div", "task-assignee", assignee));
   return item;
 }
 
@@ -709,7 +714,7 @@ function openTask(id) {
     originEl.textContent = origin;
     originEl.classList.toggle("hidden", !origin);
   }
-  document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
+  document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + staffAssigneeLabel(task);
   document.getElementById("modal-status").replaceChildren(...badgeElements(task));
 
   const rejectionEl = document.getElementById("modal-rejection");
@@ -1019,6 +1024,48 @@ function closeStaffPages() {
   closePage("report-page");
 }
 
+function selectedAddTaskAssignee() {
+  const allen = document.getElementById("add-task-assignee-allen");
+  return allen && allen.getAttribute("aria-checked") === "true" ? "allen" : "self";
+}
+
+function setAddTaskAssignee(value) {
+  const forAllen = value === "allen";
+  const selfBtn = document.getElementById("add-task-assignee-self");
+  const allenBtn = document.getElementById("add-task-assignee-allen");
+  if (selfBtn) {
+    selfBtn.classList.toggle("is-active", !forAllen);
+    selfBtn.setAttribute("aria-checked", String(!forAllen));
+    selfBtn.tabIndex = forAllen ? -1 : 0;
+  }
+  if (allenBtn) {
+    allenBtn.classList.toggle("is-active", forAllen);
+    allenBtn.setAttribute("aria-checked", String(forAllen));
+    allenBtn.tabIndex = forAllen ? 0 : -1;
+  }
+}
+
+function bindAddTaskAssigneeChoice() {
+  const group = document.getElementById("add-task-assignee-choice");
+  if (!group) return;
+  group.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-assignee]");
+    if (!btn || !group.contains(btn)) return;
+    setAddTaskAssignee(btn.getAttribute("data-assignee"));
+  });
+  group.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = (event.key === "ArrowRight" || event.key === "ArrowDown" || event.key === "End")
+      ? "allen"
+      : "self";
+    setAddTaskAssignee(next);
+    const focusId = next === "allen" ? "add-task-assignee-allen" : "add-task-assignee-self";
+    const focusBtn = document.getElementById(focusId);
+    if (focusBtn) focusBtn.focus();
+  });
+}
+
 function openAddTaskPage() {
   const staff = getCurrentStaff();
   if (!staff) {
@@ -1036,8 +1083,7 @@ function openAddTaskPage() {
   setFormError("add-task-error", "");
   fillLocationSelect(true);
   if (!locationsReady()) setFormError("add-task-error", LOCATION_UNSET_MSG);
-  const assignee = document.getElementById("add-task-assignee");
-  if (assignee) assignee.textContent = officialStaffName();
+  setAddTaskAssignee("self");
   const page = document.getElementById("add-task-page");
   if (page) page.classList.remove("hidden");
   const title = document.getElementById("add-task-title-input");
@@ -1159,6 +1205,7 @@ async function onAddTaskSubmit(event) {
       if (dataUrl) photos.push(dataUrl);
     }
     const name = officialStaffName();
+    const forAllen = selectedAddTaskAssignee() === "allen";
     const F = STAFF_TASK;
     // dueDate is admin-only: never set it on staff creates, and never show it in this app.
     const payload = {
@@ -1166,8 +1213,8 @@ async function onAddTaskSubmit(event) {
       [F.description]: description,
       [F.location]: location,
       [F.locationId]: locationId,
-      [F.assigneeId]: staff.employeeId,
-      [F.assigneeName]: name,
+      [F.assigneeId]: forAllen ? "ALLEN" : staff.employeeId,
+      [F.assigneeName]: forAllen ? "Allen" : name,
       [F.status]: "open",
       [F.createdAt]: new Date().toISOString(),
       [F.photos]: photos,
@@ -1265,6 +1312,7 @@ function setupStaffPages() {
     });
   }
   if (addForm) addForm.addEventListener("submit", onAddTaskSubmit);
+  bindAddTaskAssigneeChoice();
   if (reportForm) reportForm.addEventListener("submit", onReportSubmit);
   ["add-task-close", "add-task-cancel"].forEach((id) => {
     const el = document.getElementById(id);

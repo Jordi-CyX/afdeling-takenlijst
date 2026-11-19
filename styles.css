@@ -1169,10 +1169,46 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   font-size: 0.92rem;
   color: var(--text-muted);
 }
-.guest-app .assignee-fixed {
+.guest-app .assignee-choice {
   margin: 0;
+  border: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+.guest-app .assignee-choice legend {
+  padding: 0;
+  margin: 0 0 0.45rem;
   color: var(--text);
   font-size: 0.95rem;
+  font-weight: 700;
+}
+.guest-app .assignee-segments {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+.guest-app .assignee-segment {
+  min-height: 44px;
+  width: 100%;
+  padding: 0.45rem 0.8rem;
+  border-radius: 10px;
+  border: 2px solid var(--border);
+  background: var(--bg-card);
+  color: var(--anthracite);
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: Arial, Helvetica, sans-serif;
+}
+.guest-app .assignee-segment:hover { background: #f3f1ee; }
+.guest-app .assignee-segment.is-active,
+.guest-app .assignee-segment[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--anthracite);
+  color: var(--anthracite);
+}
+.guest-app .assignee-segment.is-active:hover,
+.guest-app .assignee-segment[aria-checked="true"]:hover {
+  background: var(--accent-hover);
 }
 .guest-app .char-count {
   margin: -0.35rem 0 0;
