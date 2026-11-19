@@ -1194,9 +1194,24 @@ function activeEmployees() {
   return employees.filter((e) => e.active);
 }
 
+// Toewijzing (eigenaar 12:20): één persoon of "Allen". Opslag voor Allen = assigneeId "ALLEN" + assigneeName "Allen".
+// Oude taken zonder persoon (assigneeId leeg/null/ontbreekt en geen naam) tonen en filteren we als Allen; geen migratie.
+function isAllenTask(task) {
+  if (!task) return false;
+  const name = String(task.assigneeName || "").trim();
+  if (task.assigneeId === "ALLEN" || name.toLowerCase() === "allen") return true;
+  return !task.assigneeId && !name;
+}
+function adminAssigneeLabel(task) {
+  return isAllenTask(task) ? "Allen" : assigneeLabel(task);
+}
+// Waarde voor de keuzelijsten: zonder persoon = Allen.
+function assigneeSelectValue(item) {
+  return isAllenTask(item) ? "ALLEN" : (item.assigneeId || "ALLEN");
+}
+
 function fillAssigneeSelects() {
   const options = [
-    ["", "Niet toegewezen"],
     ["ALLEN", "Allen"],
     ...activeEmployees().map((e) => [e.id, e.name])
   ];
@@ -1214,8 +1229,7 @@ function fillAssigneeSelects() {
 
 function assigneeFromSelect(select) {
   const id = select.value;
-  if (id === "ALLEN") return { assigneeId: "ALLEN", assigneeName: "Allen" };
-  if (!id) return { assigneeId: "", assigneeName: "" };
+  if (!id || id === "ALLEN") return { assigneeId: "ALLEN", assigneeName: "Allen" };
   const emp = employees.find((e) => e.id === id);
   return { assigneeId: id, assigneeName: emp ? emp.name : "" };
 }
@@ -1413,7 +1427,7 @@ function startEditTask(id) {
   setLegacyLocationNote(task.locationId ? "" : (task.location || ""));
   document.getElementById("is-urgent").checked = Boolean(task.urgent);
   document.getElementById("description").value = task.description || "";
-  document.getElementById("assignee-select").value = task.assigneeId || "";
+  document.getElementById("assignee-select").value = assigneeSelectValue(task);
   document.getElementById("due-date").value = isValidDueDate(task.dueDate) ? task.dueDate : "";
   document.getElementById("is-recurring").checked = false;
   document.getElementById("is-recurring").disabled = true;
@@ -1441,7 +1455,7 @@ function startEditTemplate(id) {
   setLegacyLocationNote(template.locationId ? "" : (template.location || ""));
   document.getElementById("is-urgent").checked = Boolean(template.urgent);
   document.getElementById("description").value = template.description || "";
-  document.getElementById("assignee-select").value = template.assigneeId || "";
+  document.getElementById("assignee-select").value = assigneeSelectValue(template);
   document.getElementById("is-recurring").checked = true;
   document.getElementById("is-recurring").disabled = true;
   const recurrence = template.recurrence || {};
@@ -1622,15 +1636,13 @@ function currentWorkloadGroups() {
     return groups.get(key);
   };
   ensure("ALLEN", "Allen");
-  ensure("UNASSIGNED", "Niet toegewezen");
   for (const emp of employees.filter((e) => e.active)) {
     ensure(emp.id || emp.name, emp.name || emp.id);
   }
   for (const task of tasks) {
     if (task.status !== "open" && task.status !== "pending") continue;
     let group;
-    if (task.assigneeId === "ALLEN" || task.assigneeName === "Allen") group = ensure("ALLEN", "Allen");
-    else if (!(task.assigneeName || "").trim() && !task.assigneeId) group = ensure("UNASSIGNED", "Niet toegewezen");
+    if (isAllenTask(task)) group = ensure("ALLEN", "Allen");
     else if (task.assigneeId && employees.some((e) => e.id === task.assigneeId)) {
       const emp = employees.find((e) => e.id === task.assigneeId);
       group = ensure(emp.id, emp.name || emp.id);
@@ -1644,8 +1656,6 @@ function currentWorkloadGroups() {
   return [...groups.values()].sort((a, b) => {
     if (a.key === "ALLEN") return -1;
     if (b.key === "ALLEN") return 1;
-    if (a.key === "UNASSIGNED") return 1;
-    if (b.key === "UNASSIGNED") return -1;
     return a.label.localeCompare(b.label, "nl");
   });
 }
@@ -1804,11 +1814,8 @@ function closeLightbox() {
 }
 
 function workflowGroup(task) {
-  if (task.assigneeId === "ALLEN" || task.assigneeName === "Allen") {
-    return { key: "ALLEN", label: "Allen" };
-  }
+  if (isAllenTask(task)) return { key: "ALLEN", label: "Allen" };
   const name = (task.assigneeName || "").trim();
-  if (!name && !task.assigneeId) return { key: "UNASSIGNED", label: "Niet toegewezen" };
   return { key: name || task.assigneeId, label: name || task.assigneeId };
 }
 
@@ -1853,7 +1860,6 @@ function renderWorkflow() {
     return groups.get(key);
   };
   ensure("ALLEN", "Allen");
-  ensure("UNASSIGNED", "Niet toegewezen");
   for (const emp of employees.filter((e) => e.active)) {
     ensure(emp.name || emp.id, emp.name || emp.id);
   }
@@ -1880,8 +1886,6 @@ function renderWorkflow() {
   const items = [...groups.values()].sort((a, b) => {
     if (a.key === "ALLEN") return -1;
     if (b.key === "ALLEN") return 1;
-    if (a.key === "UNASSIGNED") return 1;
-    if (b.key === "UNASSIGNED") return -1;
     return a.label.localeCompare(b.label, "nl");
   });
   if (!items.length) {
@@ -1974,11 +1978,8 @@ function locationLabel(item) {
 
 function assigneeBanner(task) {
   const name = (task.assigneeName || "").trim();
-  const isAllen = task.assigneeId === "ALLEN" || name.toLowerCase() === "allen";
-  const unassigned = !isAllen && !name;
-  const label = unassigned ? "Niet toegewezen" : (isAllen ? "Allen" : name);
-  const cls = unassigned ? " task-assignee--muted" : "";
-  return dom`<div class="task-assignee${cls}">${label}</div>`;
+  // Eigenaar 12:20: zonder persoon = Allen (geen "Niet toegewezen" meer).
+  return dom`<div class="task-assignee">${isAllenTask(task) ? "Allen" : name}</div>`;
 }
 
 function taskItem(task) {
@@ -2030,11 +2031,8 @@ function taskMatchesFilters(task, includeCompleted = false) {
   }
   const employee = taskFilters.employee || "all";
   if (employee !== "all") {
-    if (employee === "ALLEN") {
-      if (!(task.assigneeId === "ALLEN" || task.assigneeName === "Allen")) return false;
-    } else if (employee === "UNASSIGNED" || employee === "") {
-      const unassigned = !(task.assigneeName || "").trim() && !task.assigneeId;
-      if (!unassigned) return false;
+    if (employee === "ALLEN" || employee === "UNASSIGNED" || employee === "") {
+      if (!isAllenTask(task)) return false;
     } else if (task.assigneeId !== employee && (task.assigneeName || "") !== employee) {
       return false;
     }
@@ -2061,7 +2059,6 @@ function fillTaskFilters() {
   setOptions(empSelect, [
     ["all", "Iedereen"],
     ["ALLEN", "Allen"],
-    ["UNASSIGNED", "Niet toegewezen"],
     ...employees.filter((e) => e.active).map((e) => [e.id, e.name])
   ]);
   if ([...empSelect.options].some((o) => o.value === previous)) empSelect.value = previous;
@@ -2148,7 +2145,7 @@ function renderTemplates() {
           <div class="task-title">${template.title}</div>
           ${locationLabel(template)}
           <div class="task-meta">
-            ${assigneeLabel(template)}
+            ${adminAssigneeLabel(template)}
             · ${describeRecurrence(template)}
           </div>
         </div>
@@ -2389,7 +2386,7 @@ function openTask(id) {
   locationEl.classList.toggle("hidden", !location);
   const relocate = document.getElementById("relocate-select");
   if (relocate) fillLocationSelect(relocate, task.locationId || "", { noneLabel: task.location && !task.locationId ? `Niet gekoppeld (${task.location})` : "Geen locatie" });
-  document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
+  document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + adminAssigneeLabel(task);
   const status = safeStatus(task.status);
   const statusBadges = [dom`<span class="badge ${status}">${status === "open" ? "Open" : status === "pending" ? "Pending" : "Afgerond"}</span>`];
   if (task.urgent) statusBadges.unshift(dom`<span class="badge urgent">Spoed</span>`);
@@ -2424,7 +2421,7 @@ function openTask(id) {
     .filter(Boolean);
   document.getElementById("modal-photos").replaceChildren(...photos);
   fillAssigneeSelects();
-  document.getElementById("reassign-select").value = task.assigneeId || "";
+  document.getElementById("reassign-select").value = assigneeSelectValue(task);
 
   const actions = document.getElementById("modal-actions");
   actions.innerHTML = "";
