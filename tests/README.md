@@ -18,3 +18,9 @@ npm test
 een lege database en eigen testgegevens. De uitvoer eindigt met `N/N PASS`; bij een fout is de exitcode 1.
 
 Let op: tests draaien verandert de live regels niet. Publiceren gebeurt alleen in de Firebase-console.
+
+## Tweede poort (tegelijk testen)
+
+`npm test` gebruikt poort **8085**. Wil een tweede agent tegelijk testen, gebruik dan
+`npm run test:alt`: die draait dezelfde tests op poort **8086** (`firebase.alt.json`). De testcode leest de
+poort uit `FIRESTORE_EMULATOR_HOST` (gezet door `emulators:exec`) en print `Emulator-poort: …` aan het eind.

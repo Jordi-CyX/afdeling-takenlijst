@@ -22,6 +22,14 @@
 // - Admin v24: employeeDetails/{employeeId} (extra gegevens per medewerker), alleen admin,
 //   vaste veldenlijst (role, department, workdays, note); geen gevoelige persoonsgegevens.
 //   Afdeling staat alleen hier, niet in employees/{id} (medewerkers en reader lezen dat).
+// BUILD V2 (19-11-2026, zla-build-v2) – zie zla-build-v2-datamodel.md
+// - settings/locations: vaste locatielijst (admin beheert, medewerkers lezen). Eigen taken van
+//   medewerkers MOETEN een locationId uit labels hebben en location == het label.
+// - tasks: urgent (bool) en source (audit-herkomst) alleen via admin; herhaal-instanties kopiëren
+//   locationId/urgent van het sjabloon.
+// - taskCompletions/{taskId}: wie afvinkte en wanneer (alleen admin leest alles; medewerker alleen
+//   het eigen doc; reader niets). Afvinken schrijft geen naam/tijd meer op de taak zelf.
+// - auditConfig (alleen admin), audits (admin schrijft, admin + reader lezen), reader leest reports.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -134,7 +142,9 @@ service cloud.firestore {
         && task.assigneeId == (("assigneeId" in tpl) ? tpl.assigneeId : "")
         && task.assigneeName == (("assigneeName" in tpl) ? tpl.assigneeName : "")
         && (("location" in task) ? task.location : "") == (("location" in tpl) ? tpl.location : "")
-        && task.photos == (("photos" in tpl) ? tpl.photos : []);
+        && task.photos == (("photos" in tpl) ? tpl.photos : [])
+        && task.get("locationId", "") == tpl.get("locationId", "")
+        && task.get("urgent", false) == tpl.get("urgent", false);
     }
 
     function isValidOccurrenceId(taskId, data) {
@@ -159,7 +169,9 @@ service cloud.firestore {
         "recurringId",
         "occurrenceDate",
         "photos",
-        "location"
+        "location",
+        "locationId",
+        "urgent"
       ]);
     }
 
@@ -198,28 +210,49 @@ service cloud.firestore {
       return resource.data.get("assigneeId", "") in [staffEmployeeId(), "ALLEN", "", null];
     }
 
-    function isStatusToggle() {
+    function taskPath(taskId) {
+      return /databases/$(database)/documents/tasks/$(taskId);
+    }
+
+    function completionPath(taskId) {
+      return /databases/$(database)/documents/taskCompletions/$(taskId);
+    }
+
+    // Build v2: nieuwe afvinkingen dragen geen naam of tijd meer op de taak (alles in
+    // taskCompletions/{taskId}); oude pendingAt/pendingBy/pendingByEmployeeId mogen alleen weg.
+    function pendingFieldsCleared() {
+      let d = request.resource.data;
+      return isNullOrMissing(d, "pendingAt")
+        && isNullOrMissing(d, "pendingBy")
+        && isNullOrMissing(d, "pendingByEmployeeId");
+    }
+
+    // Terugzetten: eigen completion-doc (wordt in dezelfde batch gewist), of een oude afvinking
+    // zonder completion-doc met pendingByEmployeeId == eigen of null (zoals voorheen).
+    function mayUntick(taskId) {
+      return exists(completionPath(taskId))
+        ? get(completionPath(taskId)).data.employeeId == staffEmployeeId()
+        : resource.data.get("pendingByEmployeeId", null) in [staffEmployeeId(), null];
+    }
+
+    function isStatusToggle(taskId) {
       return isOwnOrSharedTask()
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(["status", "pendingAt", "pendingBy", "pendingByEmployeeId"])
+        && pendingFieldsCleared()
         && (
           (
             resource.data.status == "open"
             && request.resource.data.status == "pending"
-            && isIsoDateTime(request.resource.data.pendingAt)
-            && isNearToday(request.resource.data.pendingAt, 1, 1)
-            && request.resource.data.pendingBy is string
-            && request.resource.data.pendingBy.size() <= 60
-            && request.resource.data.pendingBy == staffEmployee().name
-            && request.resource.data.get("pendingByEmployeeId", null) == staffEmployeeId()
+            && existsAfter(completionPath(taskId))
+            && getAfter(completionPath(taskId)).data.employeeId == staffEmployeeId()
+            && getAfter(completionPath(taskId)).data.at == request.time
           )
           || (
             resource.data.status == "pending"
             && request.resource.data.status == "open"
-            && request.resource.data.pendingAt == null
-            && request.resource.data.pendingBy == null
-            && pendingByEmployeeIdCleared()
-            && resource.data.get("pendingByEmployeeId", null) in [staffEmployeeId(), null]
+            && !existsAfter(completionPath(taskId))
+            && mayUntick(taskId)
           )
         );
     }
@@ -234,6 +267,7 @@ service cloud.firestore {
           "title",
           "description",
           "location",
+          "locationId",
           "assigneeId",
           "assigneeName",
           "status",
@@ -253,7 +287,7 @@ service cloud.firestore {
         && data.title.size() >= 1
         && data.title.size() <= 120
         && (!("description" in data) || (data.description is string && data.description.size() <= 2000))
-        && (!("location" in data) || (data.location is string && data.location.size() <= 120))
+        && isValidLocationRef(data)
         && data.assigneeId == staffEmployeeId()
         && data.assigneeName == staffEmployee().name
         && data.status == "open"
@@ -275,12 +309,152 @@ service cloud.firestore {
         && isNullOrMissing(data, "completedAt");
     }
 
+    // Build v2: vaste locatielijst. labels = { id: label } van de ACTIEVE locaties.
+    function locationsPath() {
+      return /databases/$(database)/documents/settings/locations;
+    }
+
+    function isLocationIdFormat(id) {
+      return id is string && id.matches("^[a-z0-9-]{1,30}$");
+    }
+
+    function isValidLocationRef(data) {
+      return "locationId" in data
+        && isLocationIdFormat(data.locationId)
+        && exists(locationsPath())
+        && data.locationId in get(locationsPath()).data.labels
+        && data.get("location", "") == get(locationsPath()).data.labels[data.locationId];
+    }
+
+    function isSafeId(s) {
+      return s is string && s.matches("^[A-Za-z0-9_-]{1,40}$");
+    }
+
+    // source = { type: "audit", auditId, auditDate: "YYYY-MM-DD", locationId, questionId, reasonId? }
+    function isValidSource(src) {
+      return src is map
+        && src.keys().hasOnly(["type", "auditId", "auditDate", "locationId", "questionId", "reasonId"])
+        && src.keys().hasAll(["type", "auditId", "auditDate", "locationId", "questionId"])
+        && src.type == "audit"
+        && isSafeId(src.auditId)
+        && src.auditDate is string
+        && src.auditDate.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+        && isLocationIdFormat(src.locationId)
+        && isSafeId(src.questionId)
+        && (!("reasonId" in src) || isSafeId(src.reasonId));
+    }
+
+    // Admin blijft vrij in taken (import/beheer), maar de nieuwe velden moeten de juiste vorm hebben.
+    function hasValidAdminTaskFields() {
+      let d = request.resource.data;
+      return (!("urgent" in d) || d.urgent is bool)
+        && (!("source" in d) || isValidSource(d.source))
+        && (!("locationId" in d) || isLocationIdFormat(d.locationId));
+    }
+
     match /tasks/{taskId} {
       allow read: if isAdmin() || isValidStaff() || isReader();
-      allow create: if isAdmin()
+      allow create: if (isAdmin() && hasValidAdminTaskFields())
         || (isValidStaff() && isValidRecurringInstance(taskId))
         || (isValidStaff() && isValidStaffTaskCreate() && counterBumpedFor("task", taskId));
-      allow update: if isAdmin() || (isValidStaff() && isStatusToggle());
+      allow update: if (isAdmin() && hasValidAdminTaskFields()) || (isValidStaff() && isStatusToggle(taskId));
+      allow delete: if isAdmin();
+    }
+
+    // Build v2: wie afvinkte en wanneer. Alleen de admin leest alles; een medewerker leest alleen
+    // zijn eigen doc (query where employeeId == eigen id); de reader niets.
+    // Schrijven door een medewerker kan alleen samen met de taak in dezelfde batch:
+    // aanmaken bij open -> pending, wissen bij pending -> open (alleen het eigen doc).
+    function isValidCompletionWrite(taskId) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(["employeeId", "name", "at"])
+        && d.keys().hasAll(["employeeId", "name", "at"])
+        && d.employeeId == staffEmployeeId()
+        && d.name is string
+        && d.name.size() <= 60
+        && d.name == staffEmployee().name
+        && d.at == request.time
+        && exists(taskPath(taskId))
+        && get(taskPath(taskId)).data.status == "open"
+        && getAfter(taskPath(taskId)).data.status == "pending";
+    }
+
+    function isValidCompletionDelete(taskId) {
+      return resource.data.employeeId == staffEmployeeId()
+        && exists(taskPath(taskId))
+        && get(taskPath(taskId)).data.status == "pending"
+        && getAfter(taskPath(taskId)).data.status == "open";
+    }
+
+    match /taskCompletions/{taskId} {
+      allow get, list: if isAdmin() || (isValidStaff() && resource.data.employeeId == staffEmployeeId());
+      allow create, update: if isAdmin() || (isValidStaff() && isValidCompletionWrite(taskId));
+      allow delete: if isAdmin() || (isValidStaff() && isValidCompletionDelete(taskId));
+    }
+
+    // Build v2: settings/locations = { items: [{id, label, order, active}], labels: {id: label}, updatedAt }.
+    // De admin-app houdt items en labels gelijk (regels kunnen een lijst van maps niet doorlopen).
+    function isValidLocationsDoc() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(["items", "labels", "updatedAt"])
+        && d.keys().hasAll(["items", "labels", "updatedAt"])
+        && d.items is list
+        && d.items.size() >= 1
+        && d.items.size() <= 50
+        && d.labels is map
+        && d.labels.size() <= 50
+        && d.updatedAt == request.time;
+    }
+
+    match /settings/{docId} {
+      allow get: if docId == "locations" && (isAdmin() || isValidStaff());
+      allow list, delete: if isAdmin();
+      allow create, update: if isAdmin() && docId == "locations" && isValidLocationsDoc();
+    }
+
+    // Build v2: vragenlijst en ronde (alleen admin). De diepe validatie doet de admin-app.
+    function isValidAuditConfig() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(["version", "updatedAt", "sections"])
+        && d.keys().hasAll(["version", "updatedAt", "sections"])
+        && d.version is int
+        && d.version >= 1
+        && d.updatedAt == request.time
+        && d.sections is list
+        && d.sections.size() <= 50;
+    }
+
+    match /auditConfig/{configId} {
+      allow read, delete: if isAdmin();
+      allow create, update: if isAdmin() && configId == "current" && isValidAuditConfig();
+    }
+
+    // Build v2: audits (concept "bezig" of "afgerond"). Admin schrijft; admin en reader lezen.
+    function isValidAudit() {
+      let d = request.resource.data;
+      return d.keys().hasOnly([
+          "status", "auditDate", "startedAt", "updatedAt", "completedAt", "configVersion",
+          "sections", "taskIds", "taskCount", "notesCount", "score"
+        ])
+        && d.keys().hasAll(["status", "auditDate", "startedAt", "updatedAt", "sections"])
+        && d.status in ["bezig", "afgerond"]
+        && d.auditDate is string
+        && d.auditDate.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+        && d.startedAt is timestamp
+        && d.updatedAt == request.time
+        && d.sections is list
+        && d.sections.size() <= 50
+        && (!("completedAt" in d) || d.completedAt == null || d.completedAt is timestamp)
+        && (!("configVersion" in d) || d.configVersion is int)
+        && (!("taskIds" in d) || (d.taskIds is list && d.taskIds.size() <= 500))
+        && (!("taskCount" in d) || d.taskCount is int)
+        && (!("notesCount" in d) || d.notesCount is int)
+        && (!("score" in d) || d.score is map);
+    }
+
+    match /audits/{auditId} {
+      allow read: if isAdmin() || isReader();
+      allow create, update: if isAdmin() && isSafeId(auditId) && isValidAudit();
       allow delete: if isAdmin();
     }
 
@@ -601,7 +775,9 @@ service cloud.firestore {
     }
 
     match /reports/{reportId} {
-      allow read, update, delete: if isAdmin();
+      // Build v2: de reader (ochtendoverzicht) leest de inhoud van meldingen.
+      allow read: if isAdmin() || isReader();
+      allow update, delete: if isAdmin();
       allow create: if isValidStaff() && isValidReportCreate() && counterBumpedFor("report", reportId);
     }
   }

@@ -18,9 +18,11 @@ const email = (id, v, code) => `emp-${id}-v${v}-${code.toLowerCase()}@zeiklijst.
 const GOOD_PHOTO = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/=";
 const BAD_PHOTO = 'data:image/png" onerror="alert(1)';
 
+// Poort: emulators:exec zet FIRESTORE_EMULATOR_HOST (8085 via npm test, 8086 via npm run test:alt).
+const EMU_PORT = Number(String(process.env.FIRESTORE_EMULATOR_HOST || "").split(":").pop()) || 8085;
 const env = await initializeTestEnvironment({
   projectId: "demo-zeiklijst",
-  firestore: { rules: RULES, host: "127.0.0.1", port: 8085 }
+  firestore: { rules: RULES, host: "127.0.0.1", port: EMU_PORT }
 });
 
 const future = TS.fromMillis(Date.now() + 7 * DAY);
@@ -55,6 +57,20 @@ async function seed() {
     await db.doc("taskMeta/t1").set({ dueDate: ymd(3) });
     await db.doc("recurring/rec1").set({ title: "Dagelijks", description: "", assigneeId: "", assigneeName: "", photos: [], paused: false });
     await db.doc("reports/r1").set({ description: "x", status: "nieuw" });
+    // Build v2: locatielijst (oud-pad is inactief: wel in items, niet in labels).
+    await db.doc("settings/locations").set({
+      items: [
+        { id: "bkc", label: "BKC", order: 1, active: true },
+        { id: "pad-16", label: "Pad 16", order: 2, active: true },
+        { id: "oud-pad", label: "Oud pad", order: 3, active: false }
+      ],
+      labels: { bkc: "BKC", "pad-16": "Pad 16" },
+      updatedAt: TS.now()
+    });
+    await db.doc("recurring/rec-loc").set({ title: "Pad 16 vegen", description: "", assigneeId: "", assigneeName: "", photos: [], paused: false, locationId: "pad-16", location: "Pad 16", urgent: true });
+    await db.doc("tasks/t-pending-new").set({ ...task, title: "Nieuw afgevinkt", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending" });
+    await db.doc("taskCompletions/t-pending-new").set({ employeeId: "emp-aart", name: "Aart", at: TS.now() });
+    await db.doc("audits/a1").set({ status: "afgerond", auditDate: ymd(), startedAt: TS.now(), updatedAt: TS.now(), sections: [] });
     await db.doc("pinResetRequests/oldreq0000000000001").set({ name: "Jane", requestedAt: TS.now() });
   });
 }
@@ -67,10 +83,22 @@ function claim(db, uid, { employeeId, pinVersion, code, markUsed = true, usedBy 
 }
 const staffCtx = (uid, em = "x@zeiklijst.app") => env.authenticatedContext(uid, { email: em }).firestore();
 const anonCtx = () => env.authenticatedContext("anon1", { firebase: { sign_in_provider: "anonymous" } }).firestore();
-const staffTask = (over = {}) => ({ title: "Lamp kapot", description: "", location: "", assigneeId: "emp-staff", assigneeName: "Staff", status: "open", createdAt: iso(), photos: [], createdByRole: "staff", createdByEmployeeId: "emp-staff", createdByName: "Staff", adminReview: "nieuw", recurringId: null, occurrenceDate: null, pendingAt: null, pendingBy: null, completedAt: null, ...over });
+const staffTask = (over = {}) => ({ title: "Lamp kapot", description: "", location: "Pad 16", locationId: "pad-16", assigneeId: "emp-staff", assigneeName: "Staff", status: "open", createdAt: iso(), photos: [], createdByRole: "staff", createdByEmployeeId: "emp-staff", createdByName: "Staff", adminReview: "nieuw", recurringId: null, occurrenceDate: null, pendingAt: null, pendingBy: null, completedAt: null, ...over });
 const report = (over = {}) => ({ description: "App hangt", employeeId: "emp-staff", employeeName: "Staff", createdAt: ST(), appVersion: "18", device: "iPhone", status: "nieuw", ...over });
-const tick = (over = {}) => ({ status: "pending", pendingAt: iso(), pendingBy: "Staff", pendingByEmployeeId: "emp-staff", ...over });
-const untick = { status: "open", pendingAt: null, pendingBy: null, pendingByEmployeeId: null };
+// Build v2: afvinken = batch van taak (alleen status) + taskCompletions/{taskId} (wie, servertijd).
+const completion = (over = {}) => ({ employeeId: "emp-staff", name: "Staff", at: ST(), ...over });
+function tickB(db, taskId, { task = {}, comp = {}, withComp = true } = {}) {
+  const b = db.batch();
+  b.update(db.doc(`tasks/${taskId}`), { status: "pending", ...task });
+  if (withComp) b.set(db.doc(`taskCompletions/${taskId}`), completion(comp));
+  return b.commit();
+}
+function untickB(db, taskId, { task = {}, delComp = true } = {}) {
+  const b = db.batch();
+  b.update(db.doc(`tasks/${taskId}`), { status: "open", pendingAt: null, pendingBy: null, pendingByEmployeeId: null, ...task });
+  if (delComp) b.delete(db.doc(`taskCompletions/${taskId}`));
+  return b.commit();
+}
 const instance = (date, over = {}) => ({ title: "Dagelijks", description: "", assigneeId: "", assigneeName: "", status: "open", createdAt: iso(), photos: [], recurringId: "rec1", occurrenceDate: date, ...over });
 
 
@@ -167,7 +195,7 @@ await t("H1/M1", "admin: gebruikte code lezen slaagt", () => assertSucceeds(env.
 await t("account", "inactief bestaand account: taken lezen faalt", () => assertFails(staffCtx("u-inact").doc("tasks/t1").get()));
 await t("account", "actief startcode-account: taken lezen slaagt", () => assertSucceeds(staffCtx("u-staff").doc("tasks/t1").get()));
 await t("account", "oude-methode-account: taken lezen faalt", () => assertFails(staffCtx("u-legacy").doc("tasks/t1").get()));
-await t("account", "oude-methode-account: afvinken faalt", () => assertFails(staffCtx("u-legacy").doc("tasks/t-own").update(tick())));
+await t("account", "oude-methode-account: afvinken faalt", () => assertFails(tickB(staffCtx("u-legacy"), "t-own")));
 await t("account", "oude-methode-account: melding maken faalt", () => assertFails(addReport(staffCtx("u-legacy"), report())));
 await t("account", "ongeldige startCode-string faalt", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("staffAccounts/u-bad").set({ employeeId: "emp-staff", pinVersion: 1, startCode: "kort" })); await assertFails(staffCtx("u-bad").doc("tasks/t1").get()); });
 await t("L3", "medewerker: eigen employees-doc get slaagt", () => assertSucceeds(staffCtx("u-staff").doc("employees/emp-staff").get()));
@@ -181,20 +209,20 @@ await t("L3", "oude-methode-account: eigen doc get faalt", () => assertFails(sta
 await t("L3", "anoniem: employees-doc get faalt", () => assertFails(anonCtx().doc("employees/emp-inact").get()));
 
 // --- L2: afvinken ---
-await t("L2", "eigen taak afvinken slaagt", () => assertSucceeds(staffCtx("u-staff").doc("tasks/t-own").update(tick())));
-await t("L2", "niet-toegewezen taak afvinken slaagt", () => assertSucceeds(staffCtx("u-staff").doc("tasks/t1").update(tick())));
-await t("L2", "taak voor Allen afvinken slaagt", () => assertSucceeds(staffCtx("u-staff").doc("tasks/t-allen").update(tick())));
-await t("L2", "taak van iemand anders afvinken faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-jane").update(tick())));
-await t("L2", "afvinken zonder pendingByEmployeeId faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-own").update(tick({ pendingByEmployeeId: null }))));
-await t("L2", "afvinken met andermans pendingByEmployeeId faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-own").update(tick({ pendingByEmployeeId: "emp-jane" }))));
-await t("L2", "andermans afvinking terugzetten faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-pending-aart").update(untick)));
-await t("L2", "eigen afvinking terugzetten slaagt", () => assertSucceeds(staffCtx("u-aart").doc("tasks/t-pending-aart").update(untick)));
-await t("M3", "afvinken met pendingAt geen datum faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-own").update(tick({ pendingAt: "x".repeat(5000) }))));
+await t("L2", "eigen taak afvinken slaagt", () => assertSucceeds(tickB(staffCtx("u-staff"), "t-own")));
+await t("L2", "niet-toegewezen taak afvinken slaagt", () => assertSucceeds(tickB(staffCtx("u-staff"), "t1")));
+await t("L2", "taak voor Allen afvinken slaagt", () => assertSucceeds(tickB(staffCtx("u-staff"), "t-allen")));
+await t("L2", "taak van iemand anders afvinken faalt", () => assertFails(tickB(staffCtx("u-staff"), "t-jane")));
+await t("L2", "afvinken zonder taskCompletions-doc faalt", () => assertFails(tickB(staffCtx("u-staff"), "t-own", { withComp: false })));
+await t("L2", "afvinken met andermans employeeId in completion faalt", () => assertFails(tickB(staffCtx("u-staff"), "t-own", { comp: { employeeId: "emp-jane" } })));
+await t("L2", "andermans oude afvinking terugzetten faalt", () => assertFails(untickB(staffCtx("u-staff"), "t-pending-aart", { delComp: false })));
+await t("L2", "eigen oude afvinking (zonder completion) terugzetten slaagt", () => assertSucceeds(untickB(staffCtx("u-aart"), "t-pending-aart", { delComp: false })));
+await t("M3", "afvinken met pendingAt op de taak faalt (geen tijd meer op de taak)", () => assertFails(tickB(staffCtx("u-staff"), "t-own", { task: { pendingAt: iso() } })));
 await t("M3", "melding met geldige foto ~249000 tekens slaagt", () => assertSucceeds(addReport(staffCtx("u-staff"), report({ photo: "data:image/jpeg;base64," + "A".repeat(249000) }))));
-await t("M3", "afvinken met pendingAt 3 dagen terug faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-own").update(tick({ pendingAt: iso(-3) }))));
-await t("M3", "afvinken met pendingBy van iemand anders faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-own").update(tick({ pendingBy: "Jane" }))));
-await t("M3", "afvinken met pendingAt ver in de toekomst faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-own").update(tick({ pendingAt: iso(30) }))));
-await t("L2", "afvinken met extra veld (title) faalt", () => assertFails(staffCtx("u-staff").doc("tasks/t-own").update({ ...tick(), title: "x" })));
+await t("M3", "completion met eigen at (geen servertijd) faalt", () => assertFails(tickB(staffCtx("u-staff"), "t-own", { comp: { at: TS.fromMillis(Date.now() - 3 * DAY) } })));
+await t("M3", "completion met naam van iemand anders faalt", () => assertFails(tickB(staffCtx("u-staff"), "t-own", { comp: { name: "Jane" } })));
+await t("M3", "afvinken met pendingBy op de taak faalt (geen naam meer op de taak)", () => assertFails(tickB(staffCtx("u-staff"), "t-own", { task: { pendingBy: "Staff", pendingByEmployeeId: "emp-staff" } })));
+await t("L2", "afvinken met extra veld (title) faalt", () => assertFails(tickB(staffCtx("u-staff"), "t-own", { task: { title: "x" } })));
 
 // --- M3: eigen taken en meldingen ---
 await t("M3", "eigen taak met geldige foto slaagt", () => assertSucceeds(addTask(staffCtx("u-staff"), staffTask({ photos: [GOOD_PHOTO] }))));
@@ -338,9 +366,120 @@ await t("details", "reader: afdeling niet leesbaar", async () => { await seedDoc
 await t("details", "notitie > 500 faalt", () => assertFails(ADM().doc("employeeDetails/emp-jane").set(details({ note: "x".repeat(501) }))));
 await t("details", "notitie 500 slaagt", () => assertSucceeds(ADM().doc("employeeDetails/emp-jane").set(details({ note: "x".repeat(500) }))));
 
+// --- Build v2: locaties, spoed, herkomst, afgerond-door, audits, reader ---
+const A = () => env.authenticatedContext(ADMIN).firestore();
+const RD = () => env.authenticatedContext(READER).firestore();
+const S2 = () => staffCtx("u-staff");
+const locDoc = (over = {}) => ({ items: [{ id: "bkc", label: "BKC", order: 1, active: true }], labels: { bkc: "BKC" }, updatedAt: ST(), ...over });
+const auditDoc = (over = {}) => ({ status: "bezig", auditDate: ymd(), startedAt: TS.now(), updatedAt: ST(), configVersion: 1, sections: [{ locationId: "bkc", questions: [] }], ...over });
+const src = (over = {}) => ({ type: "audit", auditId: "a1", auditDate: ymd(), locationId: "pad-16", questionId: "massaplein", ...over });
+const cfg = (over = {}) => ({ version: 1, updatedAt: ST(), sections: [], ...over });
+
+// locaties
+await t("v2-loc", "medewerker: settings/locations lezen slaagt", () => assertSucceeds(S2().doc("settings/locations").get()));
+await t("v2-loc", "anoniem: settings/locations lezen faalt", () => assertFails(anonCtx().doc("settings/locations").get()));
+await t("v2-loc", "reader: settings/locations lezen faalt", () => assertFails(RD().doc("settings/locations").get()));
+await t("v2-loc", "inactieve medewerker: settings/locations lezen faalt", () => assertFails(staffCtx("u-inact").doc("settings/locations").get()));
+await t("v2-loc", "medewerker: settings/locations schrijven faalt", () => assertFails(S2().doc("settings/locations").set(locDoc())));
+await t("v2-loc", "medewerker: ander settings-doc lezen faalt", () => assertFails(S2().doc("settings/geheim").get()));
+await t("v2-loc", "admin: locatielijst opslaan slaagt", () => assertSucceeds(A().doc("settings/locations").set(locDoc())));
+await t("v2-loc", "admin: locatielijst zonder labels faalt", () => assertFails(A().doc("settings/locations").set({ items: [{ id: "bkc" }], updatedAt: ST() })));
+await t("v2-loc", "admin: locatielijst met eigen updatedAt faalt", () => assertFails(A().doc("settings/locations").set(locDoc({ updatedAt: TS.now() }))));
+await t("v2-loc", "admin: lege locatielijst faalt", () => assertFails(A().doc("settings/locations").set(locDoc({ items: [] }))));
+await t("v2-loc", "admin: locatielijst met extra veld faalt", () => assertFails(A().doc("settings/locations").set(locDoc({ extra: 1 }))));
+await t("v2-loc", "admin: ander settings-doc schrijven faalt", () => assertFails(A().doc("settings/anders").set(locDoc())));
+await t("v2-loc", "eigen taak met geldige locatie slaagt", () => assertSucceeds(addTask(S2(), staffTask())));
+await t("v2-loc", "eigen taak zonder locationId faalt", async () => { const d = staffTask(); delete d.locationId; d.location = ""; await assertFails(addTask(S2(), d)); });
+await t("v2-loc", "eigen taak met onbekende locationId faalt", () => assertFails(addTask(S2(), staffTask({ locationId: "pad-99", location: "Pad 99" }))));
+await t("v2-loc", "eigen taak met inactieve locatie faalt", () => assertFails(addTask(S2(), staffTask({ locationId: "oud-pad", location: "Oud pad" }))));
+await t("v2-loc", "eigen taak met label dat niet bij id past faalt", () => assertFails(addTask(S2(), staffTask({ locationId: "pad-16", location: "BKC" }))));
+await t("v2-loc", "eigen taak met vrije-tekst-locatie faalt", () => assertFails(addTask(S2(), staffTask({ location: "Achter de kassa" }))));
+await t("v2-loc", "eigen taak met locationId in verkeerd formaat faalt", () => assertFails(addTask(S2(), staffTask({ locationId: "Pad 16" }))));
+await t("v2-loc", "eigen taak zonder locatielijst faalt", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("settings/locations").delete()); await assertFails(addTask(S2(), staffTask())); });
+await t("v2-loc", "admin: oude taak aan locatie koppelen (alleen locationId) slaagt", () => assertSucceeds(A().doc("tasks/t1").update({ locationId: "pad-16" })));
+await t("v2-loc", "admin: locationId ontkoppelen slaagt", async () => { await seedDoc("tasks/t9", { title: "x", status: "open", locationId: "bkc", location: "oude tekst" }); await assertSucceeds(A().doc("tasks/t9").update({ locationId: firebase.firestore.FieldValue.delete() })); });
+await t("v2-loc", "admin: locationId in verkeerd formaat faalt", () => assertFails(A().doc("tasks/t1").update({ locationId: "Pad 16!" })));
+await t("v2-loc", "medewerker: locationId van taak wijzigen faalt", () => assertFails(S2().doc("tasks/t-own").update({ locationId: "bkc" })));
+await t("v2-loc", "oude taak met vrije-tekst-locatie blijft leesbaar en afvinkbaar", async () => { await seedDoc("tasks/t-oud", { title: "Oud", description: "", status: "open", createdAt: iso(-30), photos: [], assigneeId: "", assigneeName: "", location: "Gang 12" }); await assertSucceeds(S2().doc("tasks/t-oud").get()); await assertSucceeds(tickB(S2(), "t-oud")); });
+
+// spoed en herkomst
+await t("v2-urgent", "eigen taak met urgent faalt", () => assertFails(addTask(S2(), staffTask({ urgent: true }))));
+await t("v2-urgent", "eigen taak met urgent false faalt (veld niet toegestaan)", () => assertFails(addTask(S2(), staffTask({ urgent: false }))));
+await t("v2-urgent", "eigen taak met source faalt", () => assertFails(addTask(S2(), staffTask({ source: src() }))));
+await t("v2-urgent", "medewerker: urgent op taak zetten faalt", () => assertFails(S2().doc("tasks/t-own").update({ urgent: true })));
+await t("v2-urgent", "medewerker: urgent meesturen bij afvinken faalt", () => assertFails(tickB(S2(), "t-own", { task: { urgent: true } })));
+await t("v2-urgent", "medewerker: source meesturen bij afvinken faalt", () => assertFails(tickB(S2(), "t-own", { task: { source: src() } })));
+await t("v2-urgent", "admin: spoed aan/uit slaagt", async () => { await assertSucceeds(A().doc("tasks/t1").update({ urgent: true })); await assertSucceeds(A().doc("tasks/t1").update({ urgent: false })); });
+await t("v2-urgent", "admin: urgent als tekst faalt", () => assertFails(A().doc("tasks/t1").update({ urgent: "ja" })));
+await t("v2-urgent", "admin: audit-taak met source slaagt", () => assertSucceeds(A().doc("tasks/audit-a1-pad-16-massaplein-rommelig").set({ title: "Pad 16 - Massaplein opruimen", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(), photos: [], locationId: "pad-16", location: "Pad 16", urgent: false, source: src({ reasonId: "rommelig" }) })));
+await t("v2-urgent", "admin: source met verkeerd type faalt", () => assertFails(A().doc("tasks/t1").update({ source: src({ type: "import" }) })));
+await t("v2-urgent", "admin: source met extra veld faalt", () => assertFails(A().doc("tasks/t1").update({ source: src({ extra: "x" }) })));
+await t("v2-urgent", "admin: source zonder questionId faalt", async () => { const x = src(); delete x.questionId; await assertFails(A().doc("tasks/t1").update({ source: x })); });
+await t("v2-urgent", "admin: source met foute datum faalt", () => assertFails(A().doc("tasks/t1").update({ source: src({ auditDate: "19-11-2026" }) })));
+await t("v2-urgent", "admin: source als tekst faalt", () => assertFails(A().doc("tasks/t1").update({ source: "audit" })));
+await t("v2-urgent", "medewerker: audit-taak (Allen) afvinken slaagt", async () => { await seedDoc("tasks/t-audit", { title: "Pad 16 - Opruimen", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(), photos: [], locationId: "pad-16", location: "Pad 16", urgent: false, source: src() }); await assertSucceeds(tickB(S2(), "t-audit")); });
+
+// herhaal-instanties met locatie en spoed
+const locInst = (over = {}) => ({ title: "Pad 16 vegen", description: "", assigneeId: "", assigneeName: "", status: "open", createdAt: iso(), photos: [], recurringId: "rec-loc", occurrenceDate: ymd(), location: "Pad 16", locationId: "pad-16", urgent: true, ...over });
+await t("v2-rec", "instantie met locationId + urgent van sjabloon slaagt", () => assertSucceeds(S2().doc(`tasks/rec-loc_${ymd()}`).set(locInst())));
+await t("v2-rec", "instantie zonder urgent (sjabloon heeft urgent) faalt", async () => { const d = locInst(); delete d.urgent; await assertFails(S2().doc(`tasks/rec-loc_${ymd()}`).set(d)); });
+await t("v2-rec", "instantie met andere locationId faalt", () => assertFails(S2().doc(`tasks/rec-loc_${ymd()}`).set(locInst({ locationId: "bkc", location: "Pad 16" }))));
+await t("v2-rec", "instantie met urgent bij sjabloon zonder urgent faalt", () => assertFails(S2().doc(`tasks/rec1_${ymd()}`).set(instance(ymd(), { urgent: true }))));
+await t("v2-rec", "instantie met urgent false bij sjabloon zonder urgent slaagt", () => assertSucceeds(S2().doc(`tasks/rec1_${ymd()}`).set(instance(ymd(), { urgent: false }))));
+await t("v2-rec", "instantie met locationId bij sjabloon zonder locatie faalt", () => assertFails(S2().doc(`tasks/rec1_${ymd()}`).set(instance(ymd(), { locationId: "pad-16" }))));
+await t("v2-rec", "instantie met source faalt", () => assertFails(S2().doc(`tasks/rec-loc_${ymd()}`).set(locInst({ source: src() }))));
+await t("v2-rec", "medewerker: sjabloon schrijven faalt", () => assertFails(S2().doc("recurring/rec-loc").update({ urgent: false })));
+await t("v2-rec", "admin: sjabloon met locatie/spoed/weekdagen slaagt", () => assertSucceeds(A().doc("recurring/rec-new").set({ title: "Z-karren", description: "", assigneeId: "ALLEN", assigneeName: "Allen", photos: [], paused: false, locationId: "z-karren", location: "Z-karren", urgent: false, recurrence: { type: "weekdays", weekdays: [1, 4], startDate: ymd() } })));
+
+// afgerond door (taskCompletions)
+await t("v2-done", "medewerker: eigen completion lezen (query) slaagt", async () => { await tickB(S2(), "t-own"); await assertSucceeds(S2().collection("taskCompletions").where("employeeId", "==", "emp-staff").get()); });
+await t("v2-done", "medewerker: andermans completion get faalt", () => assertFails(S2().doc("taskCompletions/t-pending-new").get()));
+await t("v2-done", "medewerker: alle completions (lijst) faalt", () => assertFails(S2().collection("taskCompletions").get()));
+await t("v2-done", "reader: completions lezen faalt", async () => { await assertFails(RD().doc("taskCompletions/t-pending-new").get()); await assertFails(RD().collection("taskCompletions").get()); });
+await t("v2-done", "anoniem: completions lezen faalt", () => assertFails(anonCtx().collection("taskCompletions").get()));
+await t("v2-done", "admin: completions lezen slaagt", () => assertSucceeds(A().collection("taskCompletions").get()));
+await t("v2-done", "medewerker: losse completion zonder taakwijziging faalt", () => assertFails(S2().doc("taskCompletions/t-own").set(completion())));
+await t("v2-done", "medewerker: completion met extra veld faalt", () => assertFails(tickB(S2(), "t-own", { comp: { note: "x" } })));
+await t("v2-done", "medewerker: completion bij al afgevinkte taak overschrijven faalt", () => assertFails(S2().doc("taskCompletions/t-pending-new").set(completion())));
+await t("v2-done", "medewerker: eigen nieuwe afvinking terugzetten (completion wissen) slaagt", async () => { await tickB(S2(), "t-own"); await new Promise((r) => setTimeout(r, 50)); await assertSucceeds(untickB(S2(), "t-own")); });
+await t("v2-done", "medewerker: terugzetten zonder completion te wissen faalt", async () => { await tickB(S2(), "t-own"); await assertFails(untickB(S2(), "t-own", { delComp: false })); });
+await t("v2-done", "medewerker: andermans nieuwe afvinking terugzetten faalt", () => assertFails(untickB(S2(), "t-pending-new")));
+await t("v2-done", "medewerker: completion wissen zonder terugzetten faalt", async () => { await tickB(S2(), "t-own"); await assertFails(S2().doc("taskCompletions/t-own").delete()); });
+await t("v2-done", "admin: goedkeuren laat completion staan", async () => { await assertSucceeds(A().doc("tasks/t-pending-new").update({ status: "afgerond", completedAt: iso() })); });
+await t("v2-done", "admin: afwijzen = taak open + completion wissen slaagt", async () => { const db = A(); const b = db.batch(); b.update(db.doc("tasks/t-pending-new"), { status: "open" }); b.delete(db.doc("taskCompletions/t-pending-new")); await assertSucceeds(b.commit()); });
+await t("v2-done", "admin: migratie oude afvinker naar completion slaagt", async () => { const db = A(); const b = db.batch(); b.set(db.doc("taskCompletions/t-pending-aart"), { employeeId: "emp-aart", name: "Aart", at: TS.now(), legacy: true }); b.update(db.doc("tasks/t-pending-aart"), { pendingAt: firebase.firestore.FieldValue.delete(), pendingBy: firebase.firestore.FieldValue.delete(), pendingByEmployeeId: firebase.firestore.FieldValue.delete() }); await assertSucceeds(b.commit()); });
+await t("v2-done", "na migratie: oorspronkelijke afvinker kan terugzetten", async () => { await seedDoc("tasks/t-pending-aart", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [] }); await seedDoc("taskCompletions/t-pending-aart", { employeeId: "emp-aart", name: "Aart", at: TS.now(), legacy: true }); await assertSucceeds(untickB(staffCtx("u-aart"), "t-pending-aart")); });
+await t("v2-done", "taak-doc bevat na afvinken geen naam of tijd", async () => { await tickB(S2(), "t-own"); let d; await env.withSecurityRulesDisabled(async (c) => { d = (await c.firestore().doc("tasks/t-own").get()).data(); }); if (d.pendingBy || d.pendingAt || d.pendingByEmployeeId) throw new Error("naam/tijd op taak"); });
+
+// vragenlijst
+await t("v2-cfg", "admin: vragenlijst opslaan slaagt", () => assertSucceeds(A().doc("auditConfig/current").set(cfg())));
+await t("v2-cfg", "admin: vragenlijst met version 0 faalt", () => assertFails(A().doc("auditConfig/current").set(cfg({ version: 0 }))));
+await t("v2-cfg", "admin: vragenlijst met extra veld faalt", () => assertFails(A().doc("auditConfig/current").set(cfg({ x: 1 }))));
+await t("v2-cfg", "admin: ander config-doc faalt", () => assertFails(A().doc("auditConfig/oud").set(cfg())));
+await t("v2-cfg", "medewerker/reader: vragenlijst lezen faalt", async () => { await seedDoc("auditConfig/current", { version: 1, updatedAt: TS.now(), sections: [] }); await assertFails(S2().doc("auditConfig/current").get()); await assertFails(RD().doc("auditConfig/current").get()); });
+await t("v2-cfg", "medewerker: vragenlijst schrijven faalt", () => assertFails(S2().doc("auditConfig/current").set(cfg())));
+
+// audits
+await t("v2-audit", "admin: concept-audit opslaan en afronden slaagt", async () => { const db = A(); await assertSucceeds(db.doc("audits/a2").set(auditDoc())); await assertSucceeds(db.doc("audits/a2").set(auditDoc({ status: "afgerond", completedAt: TS.now(), taskIds: ["t1"], taskCount: 1, notesCount: 0, score: { bkc: { good: 3, total: 4 } } }))); });
+await t("v2-audit", "admin: audit met onbekende status faalt", () => assertFails(A().doc("audits/a2").set(auditDoc({ status: "klaar" }))));
+await t("v2-audit", "admin: audit met eigen updatedAt faalt", () => assertFails(A().doc("audits/a2").set(auditDoc({ updatedAt: TS.now() }))));
+await t("v2-audit", "admin: audit met extra veld faalt", () => assertFails(A().doc("audits/a2").set(auditDoc({ extra: 1 }))));
+await t("v2-audit", "admin: audit met foute datum faalt", () => assertFails(A().doc("audits/a2").set(auditDoc({ auditDate: "vandaag" }))));
+await t("v2-audit", "admin: audit-id met rare tekens faalt", () => assertFails(A().doc("audits/a b").set(auditDoc())));
+await t("v2-audit", "reader: audits lezen slaagt", async () => { await assertSucceeds(RD().collection("audits").get()); await assertSucceeds(RD().doc("audits/a1").get()); });
+await t("v2-audit", "reader: audit schrijven faalt", () => assertFails(RD().doc("audits/a2").set(auditDoc())));
+await t("v2-audit", "medewerker: audits lezen/schrijven faalt", async () => { await assertFails(S2().doc("audits/a1").get()); await assertFails(S2().doc("audits/a2").set(auditDoc())); });
+await t("v2-audit", "anoniem: audits lezen faalt", () => assertFails(anonCtx().collection("audits").get()));
+
+// reader
+await t("v2-reader", "reader: reports lezen slaagt", async () => { await assertSucceeds(RD().collection("reports").get()); await assertSucceeds(RD().doc("reports/r1").get()); });
+await t("v2-reader", "reader: report wijzigen/wissen faalt", async () => { await assertFails(RD().doc("reports/r1").update({ status: "opgelost" })); await assertFails(RD().doc("reports/r1").delete()); });
+await t("v2-reader", "reader: employeeDetails/taskCompletions/pinResetRequests faalt", async () => { await assertFails(RD().collection("employeeDetails").get()); await assertFails(RD().collection("taskCompletions").get()); await assertFails(RD().collection("pinResetRequests").get()); });
+await t("v2-reader", "medewerker: reports lezen faalt nog steeds", () => assertFails(S2().collection("reports").get()));
+
 // --- Reader en admin ---
 await t("reader", "reader: tasks en employees lezen slaagt", async () => { const db = env.authenticatedContext(READER).firestore(); await assertSucceeds(db.collection("tasks").get()); await assertSucceeds(db.collection("employees").get()); });
-await t("reader", "reader: geen startCodes/reports/nameIndex/schrijven", async () => { const db = env.authenticatedContext(READER).firestore(); await assertFails(db.collection("startCodes").get()); await assertFails(db.collection("reports").get()); await assertFails(db.collection("nameIndex").get()); await assertFails(db.doc("tasks/t1").update({ title: "x" })); });
+await t("reader", "reader: geen startCodes/nameIndex/schrijven", async () => { const db = env.authenticatedContext(READER).firestore(); await assertFails(db.collection("startCodes").get()); await assertFails(db.collection("nameIndex").get()); await assertFails(db.doc("tasks/t1").update({ title: "x" })); });
 await t("admin", "admin: startcode-uitgifte-batch slaagt", async () => {
   const db = env.authenticatedContext(ADMIN).firestore();
   const b = db.batch();
@@ -359,5 +498,6 @@ await t("admin", "admin: taak met dueDate in taskMeta + taak bijwerken slaagt", 
 await env.cleanup();
 for (const r of results) console.log(r.join(" | "));
 const pass = results.filter((r) => r[0] === "PASS").length;
+console.log(`Emulator-poort: ${EMU_PORT}`);
 console.log(`${pass}/${results.length} PASS`);
 process.exit(pass === results.length ? 0 : 1);
