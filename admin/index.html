@@ -29,16 +29,16 @@
   }
 }
   </script>
-  <link rel="manifest" href="manifest.webmanifest?v=26">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=26">
-  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=26">
-  <link rel="icon" href="favicon.ico?v=26" sizes="any">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=26">
-  <link rel="stylesheet" href="../styles.css?v=26">
-  <link rel="stylesheet" href="admin.css?v=26">
+  <script src="version.js?v=27"></script>
+  <link rel="manifest" href="manifest.webmanifest?v=27">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=27">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=27">
+  <link rel="icon" href="favicon.ico?v=27" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=27">
+  <link rel="stylesheet" href="../styles.css?v=27">
+  <link rel="stylesheet" href="admin.css?v=27">
 </head>
 <body>
-  <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
   <header>
     <div class="header-inner">
       <h1><button type="button" id="logo-home-title" class="logo-home-title" aria-label="Naar het dashboard">Zeiklijst Admin</button></h1>
@@ -96,6 +96,7 @@
         </div>
       </div>
     </div>
+    <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie, tik om te verversen</button>
   </header>
 
   <div id="login-screen">
@@ -229,12 +230,12 @@
         <input type="text" id="title" placeholder="Titel" required autocomplete="off">
         <label>
           Locatie
-          <select id="location-select"><option value="">Geen locatie</option></select>
+          <select id="location-select" required><option value="" disabled selected>Kies een locatie</option></select>
         </label>
         <p id="location-legacy" class="pin-meta hidden"></p>
-        <label class="check-row">
-          <input type="checkbox" id="is-urgent">
-          Spoed (bovenaan bij medewerkers)
+        <label class="check-row urgent-toggle">
+          <input type="checkbox" id="is-urgent" role="switch">
+          <span class="urgent-text"><strong>Spoed</strong> <span>bovenaan bij medewerkers</span></span>
         </label>
         <label id="due-date-wrap">
           Streefdatum (optioneel)
@@ -249,7 +250,8 @@
         </label>
         <label class="file-label">
           Foto's (optioneel, max. 4)
-          <input type="file" id="photos" accept="image/*" multiple>
+          <input type="file" id="photos" class="file-input-hidden" accept="image/*" multiple>
+          <span class="file-pick"><span class="file-pick-btn" aria-hidden="true">Foto's kiezen</span> <span id="photos-chosen" class="file-chosen">Geen foto gekozen</span></span>
         </label>
         <p id="photo-note" class="section-intro hidden">Bestaande foto's blijven bewaard als je geen nieuwe kiest.</p>
         <label class="check-row">
@@ -257,6 +259,7 @@
           Herhalende taak
         </label>
         <div id="recurrence-fields" class="recurrence-fields hidden">
+          <p class="section-intro">Een herhaalde taak verschijnt op de dag zelf, zodra iemand die dag de app opent.</p>
           <label>
             Herhaling
             <select id="recurrence-type">
@@ -485,6 +488,7 @@
       </div>
     </div>
   </div>
+  <footer class="app-version-bar"><span id="app-version" class="app-version">admin</span></footer>
   <div id="app-toast" class="app-toast hidden" role="status"></div>
   <div id="print-view" class="print-view" aria-hidden="true"></div>
 
@@ -493,6 +497,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=26"></script>
+  <script type="module" src="admin.js?v=27"></script>
 </body>
 </html>
