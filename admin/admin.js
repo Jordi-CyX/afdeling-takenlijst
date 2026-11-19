@@ -6,7 +6,7 @@ import {
   signInWithEmailAndPassword,
   signOut
 } from "../firebase-init.js";
-import { increment, arrayUnion, deleteField, Timestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+import { increment, arrayUnion, deleteField, Timestamp, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   db,
   doc,
@@ -65,6 +65,12 @@ let migratingDueDates = false;
 let startCodes = [];
 let employeesReady = false;
 let swUpdateHandlerBound = false;
+let employeeDetails = new Map();
+let staffCounters = new Map();
+let empDashId = "";
+let empDashFormFor = "";
+let empDashDirty = false;
+const EMP_DASH_KEY = "zeiklijst-admin-employee";
 
 
 // ---- Veilig renderen ------------------------------------------------------
@@ -143,10 +149,11 @@ function safeStatus(status) {
 }
 
 const SECTION_KEY = "zeiklijst-admin-section";
-const SECTIONS = ["dashboard", "medewerkers", "taken", "controle", "workflow", "meldingen", "data"];
+const SECTIONS = ["dashboard", "medewerkers", "medewerker", "taken", "controle", "workflow", "meldingen", "data"];
 const SECTION_LABELS = {
   dashboard: "Dashboard",
   medewerkers: "Medewerkers",
+  medewerker: "Per medewerker",
   taken: "Taken",
   controle: "Controle",
   workflow: "Workflow",
@@ -191,6 +198,12 @@ function showToast(message, type = "error") {
   toastTimer = setTimeout(() => el.classList.add("hidden"), 4500);
 }
 
+function hideToast() {
+  const el = document.getElementById("app-toast");
+  if (el) el.classList.add("hidden");
+  clearTimeout(toastTimer);
+}
+
 function closeDialog(result) {
   const dialog = document.getElementById("app-dialog");
   if (dialog) dialog.classList.add("hidden");
@@ -201,6 +214,7 @@ function closeDialog(result) {
 
 function showDialog({ title, message, input = false, inputLabel = "Reden", inputPlaceholder = "", inputValue = "", confirmText = "Bevestigen", cancelText = "Annuleren", danger = false } = {}) {
   if (dialogResolve) closeDialog({ ok: false });
+  hideToast(); // v24: de melding mag de knoppen van de dialoog niet afdekken (mobiel)
   return new Promise((resolve) => {
     dialogResolve = resolve;
     document.getElementById("app-dialog-title").textContent = title || "Bevestigen";
@@ -276,16 +290,33 @@ function startListeners() {
   }), (list) => {
     staffAccounts = list;
     renderEmployees();
+    renderEmployeeDashboard();
   }, ignoreListenerError);
   listenCollection("startCodes", normalizeStartCodeDoc, (list) => {
     startCodes = list;
     renderEmployees();
+    renderEmployeeDashboard();
     renderPinResets();
   }, ignoreListenerError);
   listenCollection("pinResetRequests", normalizePinResetRequest, (list) => {
     pinResetRequests = list.slice().sort((a, b) => String(b.requestedAt || "").localeCompare(String(a.requestedAt || "")));
     renderPinResets();
+    renderEmployeeDashboard();
     updateNavBadge();
+  }, ignoreListenerError);
+  // v24: extra gegevens per medewerker (alleen admin).
+  listenCollection("employeeDetails", normalizeEmployeeDetails, (list) => {
+    employeeDetails = new Map(list.map((d) => [d.id, d]));
+    renderEmployeeDashboard();
+  }, ignoreListenerError);
+  listenCollection("staffDailyCounters", (id, d) => ({
+    id,
+    day: Number.isInteger(d && d.day) ? d.day : -1,
+    tasks: Number(d && d.tasks) || 0,
+    reports: Number(d && d.reports) || 0
+  }), (list) => {
+    staffCounters = new Map(list.map((c) => [c.id, c]));
+    renderEmployeeDashboard();
   }, ignoreListenerError);
   listenCollection("reports", normalizeReport, (list) => {
     reports = list.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
@@ -678,6 +709,7 @@ function showBulkStartCodes(items, expiresAt) {
 function showStartCode({ name, code, expiresAt }) {
   const dialog = document.getElementById("code-dialog");
   if (!dialog) return;
+  hideToast();
   const formatted = formatStartCode(code);
   document.getElementById("code-dialog-name").textContent = name ? `Voor ${name}` : "";
   document.getElementById("code-dialog-code").textContent = formatted;
@@ -838,6 +870,7 @@ function setupUi() {
   const bulkBtn = document.getElementById("bulk-startcodes-btn");
   if (bulkBtn) bulkBtn.onclick = () => issueStartCodesForAllActive();
   buildWeekdayPicker();
+  setupEmployeeDashboard();
   document.getElementById("recurrence-start").value = localDateKey(new Date());
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkDateChange();
@@ -1246,6 +1279,10 @@ function showSection(name, persist = true, options = {}) {
   });
   closeNav();
   if (section === "taken" && options.filters) renderTasks();
+  if (section === "medewerker") {
+    if (options.employeeId) selectEmployeeDashboard(options.employeeId);
+    else renderEmployeeDashboard();
+  }
 }
 
 function pendingCount() {
@@ -1298,6 +1335,7 @@ function renderAll() {
   renderCompleted();
   renderTemplates();
   renderEmployees();
+  renderEmployeeDashboard();
   renderControle();
   renderWorkflow();
   renderPinResets();
@@ -1892,6 +1930,7 @@ function employeeItem(emp) {
         ${emp.active ? dom`<button type="button" data-act="code" title="Startcode (7 dagen geldig, eenmalig)">${hasPin ? "Pincode resetten (startcode)" : "Startcode maken"}</button>` : ""}
         ${open ? dom`<button type="button" class="secondary" data-act="show-code">Code tonen</button>` : ""}
         ${open ? dom`<button type="button" class="secondary" data-act="delete-code">Code verwijderen</button>` : ""}
+        <button type="button" class="secondary" data-act="dash">Openen</button>
         <button type="button" class="secondary" data-act="rename">Hernoemen</button>
         <button type="button" class="secondary" data-act="toggle">${emp.active ? "Deactiveren" : "Activeren"}</button>
         <button type="button" class="danger" data-act="delete">Verwijderen</button>
@@ -1904,6 +1943,7 @@ function employeeItem(emp) {
   on("code", () => issueStartCode(emp.id));
   on("show-code", () => open && showStartCode({ name: emp.name, code: open.id, expiresAt: open.expiresAt }));
   on("delete-code", () => open && deleteStartCode(open.id));
+  on("dash", () => showSection("medewerker", true, { employeeId: emp.id }));
   on("rename", () => renameEmployee(emp.id));
   on("toggle", () => toggleEmployee(emp.id));
   on("delete", () => removeEmployee(emp.id));
@@ -2036,6 +2076,7 @@ async function removeEmployee(id) {
   await safeWrite(async () => {
     const batch = writeBatch(db);
     batch.delete(doc(db, "employees", id));
+    if (employeeDetails.has(id)) batch.delete(doc(db, "employeeDetails", id));
     for (const code of startCodes.filter((c) => c.employeeId === id)) {
       batch.delete(doc(db, "startCodes", code.id));
     }
@@ -2362,7 +2403,8 @@ function exportData() {
     exportedAt: new Date().toISOString(),
     tasks,
     templates,
-    employees
+    employees,
+    employeeDetails: [...employeeDetails.values()]
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
@@ -2454,3 +2496,280 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 setupUi();
+
+
+// ---- v24: Per medewerker ----------------------------------------------------
+// Eén medewerker kiezen (dropdown) en daar alles voor doen: startcode, pincode resetten,
+// resetverzoeken en extra gegevens (employeeDetails/{id}, alleen admin).
+const DETAIL_LIMITS = { role: 40, staffNumber: 20, note: 500, hoursMax: 48 };
+
+function normalizeEmployeeDetails(id, data) {
+  const d = data || {};
+  const hours = typeof d.contractHours === "number" && Number.isFinite(d.contractHours) ? d.contractHours : null;
+  return {
+    id,
+    role: typeof d.role === "string" ? d.role.slice(0, DETAIL_LIMITS.role) : "",
+    staffNumber: typeof d.staffNumber === "string" ? d.staffNumber.slice(0, DETAIL_LIMITS.staffNumber) : "",
+    contractHours: hours,
+    workdays: Array.isArray(d.workdays) ? d.workdays.filter((n) => Number.isInteger(n) && n >= 0 && n <= 6) : [],
+    startDate: typeof d.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.startDate) ? d.startDate : "",
+    note: typeof d.note === "string" ? d.note.slice(0, DETAIL_LIMITS.note) : "",
+    updatedAt: timestampToIso(d.updatedAt)
+  };
+}
+
+function setupEmployeeDashboard() {
+  const select = document.getElementById("emp-dash-select");
+  if (!select) return;
+  empDashId = localStorage.getItem(EMP_DASH_KEY) || "";
+  document.getElementById("det-workdays").replaceChildren(...WEEKDAYS.map((day) => dom`
+    <label>
+      <input type="checkbox" value="${day.value}" aria-label="${day.long}">
+      <span>${day.short}</span>
+    </label>`));
+  select.onchange = () => selectEmployeeDashboard(select.value);
+  const form = document.getElementById("emp-details-form");
+  form.onsubmit = saveEmployeeDetails;
+  form.addEventListener("input", () => {
+    empDashDirty = true;
+    updateNoteCount();
+  });
+  document.getElementById("det-revert").onclick = () => {
+    empDashDirty = false;
+    fillDetailsForm(true);
+  };
+}
+
+async function selectEmployeeDashboard(id) {
+  if (id !== empDashId && empDashDirty) {
+    const ok = await confirmAction("Je hebt niet-opgeslagen wijzigingen. Toch een andere medewerker kiezen?", { title: "Niet opgeslagen", confirmText: "Doorgaan" });
+    if (!ok) {
+      document.getElementById("emp-dash-select").value = empDashId;
+      return;
+    }
+  }
+  empDashId = id || "";
+  empDashDirty = false;
+  if (empDashId) localStorage.setItem(EMP_DASH_KEY, empDashId);
+  else localStorage.removeItem(EMP_DASH_KEY);
+  renderEmployeeDashboard();
+}
+
+function fillEmployeeDashSelect() {
+  const select = document.getElementById("emp-dash-select");
+  const active = employees.filter((e) => e.active);
+  const inactive = employees.filter((e) => !e.active);
+  const groups = [new Option("Kies medewerker…", "")];
+  const group = (label, list) => {
+    if (!list.length) return null;
+    const g = document.createElement("optgroup");
+    g.label = label;
+    g.append(...list.map((e) => new Option(e.name + (resetRequestsFor(e).length ? " • verzoek" : ""), e.id)));
+    return g;
+  };
+  const signature = JSON.stringify(employees.map((e) => [e.id, e.name, e.active, resetRequestsFor(e).length]));
+  if (select.dataset.signature !== signature) {
+    const a = group("Actief", active);
+    const i = group("Inactief", inactive);
+    select.replaceChildren(...groups, ...[a, i].filter(Boolean));
+    select.dataset.signature = signature;
+  }
+  select.value = employees.some((e) => e.id === empDashId) ? empDashId : "";
+}
+
+function resetRequestsFor(emp) {
+  return pinResetRequests.filter((req) => {
+    const guess = guessEmployeeForRequest(req);
+    return guess && guess.id === emp.id;
+  });
+}
+
+function renderEmployeeDashboard() {
+  const select = document.getElementById("emp-dash-select");
+  if (!select) return;
+  fillEmployeeDashSelect();
+  const emp = employees.find((e) => e.id === empDashId) || null;
+  document.getElementById("emp-dash-empty").classList.toggle("hidden", Boolean(emp));
+  document.getElementById("emp-dash-body").classList.toggle("hidden", !emp);
+  if (!emp) {
+    empDashFormFor = "";
+    return;
+  }
+  renderEmpDashStatus(emp);
+  renderEmpDashResets(emp);
+  fillDetailsForm(empDashFormFor !== emp.id);
+}
+
+function renderEmpDashStatus(emp) {
+  const status = accountStatus(emp);
+  const open = openStartCodeFor(emp);
+  let pinText = "Nog geen pincode";
+  if (status.valid) pinText = "Pincode ingesteld met startcode";
+  else if (open) pinText = "Wacht op pincode met startcode";
+  else if (status.stale) pinText = "Oude of verlopen inlog: werkt niet meer, nieuwe startcode nodig";
+  const assigned = tasks.filter((t) => t.assigneeId === emp.id);
+  const openCount = assigned.filter((t) => t.status === "open").length;
+  const pendingCountEmp = assigned.filter((t) => t.status === "pending").length;
+  const today = Math.floor((Date.now() + 3600000) / 86400000);
+  const counter = staffCounters.get(emp.id);
+  const usedToday = counter && counter.day === today ? counter : { tasks: 0, reports: 0 };
+  const frag = dom`
+    <div class="emp-dash-head">
+      <p class="emp-dash-name">${emp.name}</p>
+      <span class="badge ${emp.active ? "open" : "paused"}">${emp.active ? "Actief" : "Inactief"}</span>
+    </div>
+    <ul class="emp-dash-facts">
+      <li><strong>Inloggen:</strong> ${pinText}</li>
+      ${open ? dom`<li><strong>Open startcode:</strong> geldig tot ${formatDateTime(open.expiresAt)}</li>` : ""}
+      <li><strong>Taken:</strong> ${openCount} open · ${pendingCountEmp} pending</li>
+      <li><strong>Vandaag verstuurd:</strong> ${usedToday.tasks}/10 eigen taken · ${usedToday.reports}/5 meldingen</li>
+    </ul>
+    ${emp.active ? "" : dom`<p class="employee-code muted">Inactief: inloggen geblokkeerd, geen startcode mogelijk. Activeer eerst.</p>`}
+    <div class="emp-dash-actions">
+      ${emp.active && !status.valid ? dom`<button type="button" data-act="code">Startcode maken</button>` : ""}
+      ${emp.active && status.valid ? dom`<button type="button" class="danger" data-act="code">Pincode resetten (nieuwe startcode)</button>` : ""}
+      ${open ? dom`<button type="button" class="secondary" data-act="show-code">Code tonen</button>` : ""}
+      ${open ? dom`<button type="button" class="secondary" data-act="delete-code">Code verwijderen</button>` : ""}
+      <button type="button" class="secondary" data-act="tasks">Taken bekijken</button>
+      <button type="button" class="secondary" data-act="rename">Hernoemen</button>
+      <button type="button" class="secondary" data-act="toggle">${emp.active ? "Deactiveren" : "Activeren"}</button>
+    </div>
+    <p class="pin-meta">Pincode resetten maakt de huidige pincode en open codes direct ongeldig. Geef de nieuwe code alleen persoonlijk.</p>`;
+  const el = document.getElementById("emp-dash-status");
+  el.replaceChildren(frag);
+  const on = (act, fn) => {
+    const btn = el.querySelector(`[data-act="${act}"]`);
+    if (btn) btn.onclick = fn;
+  };
+  on("code", () => issueStartCode(emp.id));
+  on("show-code", () => open && showStartCode({ name: emp.name, code: open.id, expiresAt: open.expiresAt }));
+  on("delete-code", () => open && deleteStartCode(open.id));
+  on("tasks", () => showSection("taken", true, { filters: { employee: emp.id, status: "all" } }));
+  on("rename", () => renameEmployee(emp.id));
+  on("toggle", () => toggleEmployee(emp.id));
+}
+
+function renderEmpDashResets(emp) {
+  const el = document.getElementById("emp-dash-resets");
+  const mine = resetRequestsFor(emp);
+  const unmatched = pinResetRequests.filter((req) => !guessEmployeeForRequest(req));
+  if (!mine.length && !unmatched.length) {
+    el.classList.add("hidden");
+    el.replaceChildren();
+    return;
+  }
+  el.classList.remove("hidden");
+  const items = mine.map((req) => {
+    const when = req.requestedAt ? formatDateTime(req.requestedAt) : "";
+    const frag = dom`
+      <div class="pin-reset-item">
+        <p><strong>Opgegeven naam: ${resetRequestName(req)}</strong>${when ? " · " + when : ""}
+          ${req.note ? dom`<span class="pin-meta pre-line">Toelichting: ${req.note}</span>` : ""}
+          <span class="pin-meta">Niet gecontroleerd. Praat eerst persoonlijk met ${emp.name} voordat je een code maakt.</span></p>
+        <div class="pin-reset-actions">
+          ${emp.active ? dom`<button type="button" data-issue>Startcode maken voor dit verzoek</button>` : ""}
+          <button type="button" class="secondary" data-dismiss>Verzoek wissen</button>
+        </div>
+      </div>`;
+    const issue = frag.querySelector("[data-issue]");
+    if (issue) issue.onclick = () => issueStartCode(emp.id, { requestId: req.id });
+    frag.querySelector("[data-dismiss]").onclick = () => dismissResetRequest(req.id);
+    return frag;
+  });
+  const extra = unmatched.length ? dom`
+    <p class="pin-meta">${unmatched.length} ${unmatched.length === 1 ? "verzoek heeft" : "verzoeken hebben"} een naam die niet duidelijk bij één medewerker hoort.
+      <button type="button" class="secondary" data-goto-list>Bekijk bij Medewerkers</button></p>` : "";
+  el.replaceChildren(dom`<h3>Pincode vergeten</h3>`, ...items, extra);
+  const go = el.querySelector("[data-goto-list]");
+  if (go) go.onclick = () => showSection("medewerkers");
+}
+
+function fillDetailsForm(force = false) {
+  const emp = employees.find((e) => e.id === empDashId);
+  if (!emp) return;
+  if (!force && empDashDirty) return; // niet over invoer heen schrijven
+  const d = employeeDetails.get(emp.id) || normalizeEmployeeDetails(emp.id, {});
+  document.getElementById("det-role").value = d.role;
+  document.getElementById("det-staffnr").value = d.staffNumber;
+  document.getElementById("det-hours").value = d.contractHours == null ? "" : String(d.contractHours);
+  document.getElementById("det-start").value = d.startDate;
+  document.getElementById("det-note").value = d.note;
+  document.querySelectorAll("#det-workdays input").forEach((input) => {
+    input.checked = d.workdays.includes(Number(input.value));
+  });
+  document.getElementById("det-updated").textContent = d.updatedAt ? `Laatst opgeslagen: ${formatDateTime(d.updatedAt)}` : "Nog geen gegevens opgeslagen.";
+  setDetailsError("");
+  updateNoteCount();
+  empDashFormFor = emp.id;
+  empDashDirty = false;
+}
+
+function updateNoteCount() {
+  const note = document.getElementById("det-note");
+  const count = document.getElementById("det-note-count");
+  if (note && count) count.textContent = `${note.value.length}/${DETAIL_LIMITS.note}`;
+}
+
+function setDetailsError(message) {
+  const el = document.getElementById("det-error");
+  el.textContent = message;
+  el.classList.toggle("hidden", !message);
+}
+
+// Leest het formulier en controleert dezelfde regels als firestore.rules. Leeg = weglaten.
+function readDetailsForm() {
+  const payload = {};
+  const role = document.getElementById("det-role").value.trim();
+  if (role) {
+    if (role.length > DETAIL_LIMITS.role) return { error: `Functie mag maximaal ${DETAIL_LIMITS.role} tekens zijn.` };
+    payload.role = role;
+  }
+  const nr = document.getElementById("det-staffnr").value.trim();
+  if (nr) {
+    if (!/^[A-Za-z0-9]{1,20}$/.test(nr)) return { error: "Personeelsnummer: alleen letters en cijfers, maximaal 20." };
+    payload.staffNumber = nr;
+  }
+  const hoursRaw = document.getElementById("det-hours").value.trim().replace(",", ".");
+  if (hoursRaw) {
+    const hours = Number(hoursRaw);
+    if (!Number.isFinite(hours) || hours < 0 || hours > DETAIL_LIMITS.hoursMax) return { error: "Contracturen moeten tussen 0 en 48 liggen." };
+    payload.contractHours = Math.round(hours * 2) / 2;
+  }
+  const days = [...document.querySelectorAll("#det-workdays input:checked")].map((i) => Number(i.value));
+  if (days.length) payload.workdays = [...new Set(days)].sort((a, b) => a - b);
+  const start = document.getElementById("det-start").value;
+  if (start) {
+    const ms = Date.parse(`${start}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !Number.isFinite(ms) || start < "1960-01-01" || ms > Date.now() + 365 * 86400000) {
+      return { error: "In dienst sinds: kies een geldige datum (niet meer dan een jaar vooruit)." };
+    }
+    payload.startDate = start;
+  }
+  const note = document.getElementById("det-note").value.trim();
+  if (note) {
+    if (note.length > DETAIL_LIMITS.note) return { error: `Notitie mag maximaal ${DETAIL_LIMITS.note} tekens zijn.` };
+    payload.note = note;
+  }
+  return { payload };
+}
+
+async function saveEmployeeDetails(event) {
+  event.preventDefault();
+  const emp = employees.find((e) => e.id === empDashId);
+  if (!emp) return;
+  const { payload, error } = readDetailsForm();
+  if (error) {
+    setDetailsError(error);
+    return;
+  }
+  setDetailsError("");
+  const btn = document.getElementById("det-save");
+  btn.disabled = true;
+  // set zonder merge: lege velden verdwijnen, de regels staan alleen deze velden toe.
+  const ok = await safeWrite(() => setDoc(doc(db, "employeeDetails", emp.id), { ...payload, updatedAt: serverTimestamp() }));
+  btn.disabled = false;
+  if (ok) {
+    empDashDirty = false;
+    showToast(`Gegevens van ${emp.name} opgeslagen.`, "ok");
+  }
+}
