@@ -29,13 +29,13 @@
   }
 }
   </script>
-  <link rel="manifest" href="manifest.webmanifest?v=23">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=23">
-  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=23">
-  <link rel="icon" href="favicon.ico?v=23" sizes="any">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=23">
-  <link rel="stylesheet" href="../styles.css?v=23">
-  <link rel="stylesheet" href="admin.css?v=23">
+  <link rel="manifest" href="manifest.webmanifest?v=24">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=24">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=24">
+  <link rel="icon" href="favicon.ico?v=24" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=24">
+  <link rel="stylesheet" href="../styles.css?v=24">
+  <link rel="stylesheet" href="admin.css?v=24">
 </head>
 <body>
   <button type="button" id="update-bar" class="update-bar hidden">Nieuwe versie beschikbaar, tik om te vernieuwen</button>
@@ -65,6 +65,7 @@
                 <span id="nav-medewerkers-badge" class="nav-badge nav-badge-pin hidden">0</span>
               </button>
             </li>
+            <li role="none"><button type="button" role="menuitem" data-section="medewerker">Per medewerker</button></li>
             <li role="none">
               <button type="button" role="menuitem" data-section="taken">
                 Taken
@@ -156,6 +157,54 @@
         <p class="pin-meta">Iedereen krijgt een nieuwe eenmalige code (7 dagen geldig). Oude pincodes werken daarna niet meer.</p>
       </div>
       <div id="employee-list"></div>
+    </section>
+
+    <section id="section-medewerker" class="admin-section hidden" data-section="medewerker">
+      <h2>Per medewerker</h2>
+      <label class="emp-dash-picker">
+        Kies medewerker
+        <select id="emp-dash-select"></select>
+      </label>
+      <p id="emp-dash-empty" class="empty-state">Kies een medewerker om startcode, pincode en gegevens te beheren.</p>
+      <div id="emp-dash-body" class="emp-dash hidden">
+        <div id="emp-dash-status" class="emp-dash-card"></div>
+        <div id="emp-dash-resets" class="pin-reset-list hidden"></div>
+        <form id="emp-details-form" class="emp-dash-card emp-details-form" novalidate>
+          <h3>Extra gegevens</h3>
+          <p class="pin-meta">Alleen zichtbaar voor de admin (niet voor de medewerker of het ochtendoverzicht). Vul hier geen gevoelige persoonsgegevens in: geen telefoon, e-mail, adres, geboortedatum, BSN, gezondheid of salaris.</p>
+          <label>
+            Functie / rol
+            <input type="text" id="det-role" maxlength="40" autocomplete="off" placeholder="bijv. Verkoper">
+          </label>
+          <label>
+            Personeelsnummer
+            <input type="text" id="det-staffnr" maxlength="20" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="alleen letters en cijfers">
+          </label>
+          <label>
+            Contracturen per week
+            <input type="number" id="det-hours" min="0" max="48" step="0.5" inputmode="decimal" placeholder="0 – 48">
+          </label>
+          <fieldset class="det-workdays">
+            <legend>Vaste werkdagen</legend>
+            <div id="det-workdays" class="weekday-picker"></div>
+          </fieldset>
+          <label>
+            In dienst sinds
+            <input type="date" id="det-start" min="1960-01-01">
+          </label>
+          <label>
+            Notitie (admin)
+            <textarea id="det-note" rows="3" maxlength="500"></textarea>
+            <span id="det-note-count" class="pin-meta">0/500</span>
+          </label>
+          <p id="det-updated" class="pin-meta"></p>
+          <p id="det-error" class="form-error hidden"></p>
+          <div class="form-actions">
+            <button type="submit" id="det-save">Gegevens opslaan</button>
+            <button type="button" id="det-revert" class="secondary">Ongedaan maken</button>
+          </div>
+        </form>
+      </div>
     </section>
 
     <section id="section-taken" class="admin-section hidden" data-section="taken">
@@ -309,7 +358,7 @@
           <button type="button" id="migrate-dismiss" class="secondary">Niet nu</button>
         </div>
       </div>
-      <p class="section-intro">Exporteer of importeer een back-up van taken, herhalingen en medewerkers.</p>
+      <p class="section-intro">Exporteer of importeer een back-up van taken, herhalingen en medewerkers. De export bevat ook de extra gegevens per medewerker (die worden niet geïmporteerd).</p>
       <div class="form-actions">
         <button type="button" id="export-btn">Exporteer</button>
         <input type="file" id="import-file" accept="application/json,.json" hidden>
@@ -370,7 +419,7 @@
       <p id="code-dialog-name" class="code-dialog-name"></p>
       <div id="code-dialog-code" class="start-code"></div>
       <p id="code-dialog-expiry" class="code-dialog-expiry"></p>
-      <p class="code-dialog-help">De medewerker opent de Zeiklijst-app, typt zijn naam en vult deze code in bij het instellen van de pincode. Geef de code persoonlijk door, niet in een groepsapp.</p>
+      <p class="code-dialog-help">De medewerker opent de Zeiklijst-app, vult deze code in en kiest daarna een pincode. Geef de code persoonlijk door, niet in een groepsapp.</p>
       <div class="form-actions">
         <button type="button" id="code-dialog-copy" class="secondary">Kopiëren</button>
         <button type="button" id="code-dialog-close">Klaar</button>
@@ -397,6 +446,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=23"></script>
+  <script type="module" src="admin.js?v=24"></script>
 </body>
 </html>
