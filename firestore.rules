@@ -288,8 +288,10 @@ service cloud.firestore {
         && data.title.size() <= 120
         && (!("description" in data) || (data.description is string && data.description.size() <= 2000))
         && isValidLocationRef(data)
-        && data.assigneeId == staffEmployeeId()
-        && data.assigneeName == staffEmployee().name
+        // Toewijzing (19-11, eigenaar 12:20): de maker zelf (met eigen naam) of "Allen".
+        // Een collega toewijzen kan een medewerker niet.
+        && ((data.assigneeId == staffEmployeeId() && data.assigneeName == staffEmployee().name)
+          || (data.assigneeId == "ALLEN" && data.assigneeName == "Allen"))
         && data.status == "open"
         && isIsoDateTime(data.createdAt)
         && isNearToday(data.createdAt, 1, 1)

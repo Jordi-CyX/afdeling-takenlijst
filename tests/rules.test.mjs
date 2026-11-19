@@ -476,6 +476,16 @@ await t("zl-vorm", "ZL-terugzetten oude afvinking zonder completion (collega) fa
 await t("zl-vorm", "ZL-terugzetten na migratie door collega faalt (completion van Aart bestaat)", async () => { await seedDoc("tasks/t-mig", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [] }); await seedDoc("taskCompletions/t-mig", { employeeId: "emp-aart", name: "Aart", at: TS.now(), legacy: true }); await assertFails(zlUntickLegacy(S2(), "t-mig")); });
 await t("zl-vorm", "ZL-terugzetten na migratie door eigenaar (eigen doc via query) slaagt", async () => { await seedDoc("tasks/t-mig", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [] }); await seedDoc("taskCompletions/t-mig", { employeeId: "emp-aart", name: "Aart", at: TS.now(), legacy: true }); await assertSucceeds(zlUntickOwn(staffCtx("u-aart"), "t-mig")); });
 await t("zl-vorm", "ZL-query eigen completions slaagt, zonder filter faalt", async () => { await assertSucceeds(S2().collection("taskCompletions").where("employeeId", "==", "emp-staff").get()); await assertFails(S2().collection("taskCompletions").get()); });
+// Toewijzing bij aanmaken door een medewerker (eigenaar 12:20): zichzelf of "Allen", geen collega.
+await t("v2-assign", "medewerker: taak voor Allen (ALLEN/Allen) slaagt", () => assertSucceeds(addTask(S2(), zlCreate({ assigneeId: "ALLEN", assigneeName: "Allen" }))));
+await t("v2-assign", "medewerker: taak voor zichzelf slaagt nog", () => assertSucceeds(addTask(S2(), zlCreate())));
+await t("v2-assign", "medewerker: taak toewijzen aan collega faalt", () => assertFails(addTask(S2(), zlCreate({ assigneeId: "emp-aart", assigneeName: "Aart" }))));
+await t("v2-assign", "medewerker: ALLEN met andere naam faalt", () => assertFails(addTask(S2(), zlCreate({ assigneeId: "ALLEN", assigneeName: "Staff" }))));
+await t("v2-assign", "medewerker: Allen-naam met eigen id faalt", () => assertFails(addTask(S2(), zlCreate({ assigneeName: "Allen" }))));
+await t("v2-assign", "medewerker: niet toegewezen (leeg) aanmaken faalt", () => assertFails(addTask(S2(), zlCreate({ assigneeId: "", assigneeName: "" }))));
+await t("v2-assign", "medewerker: andermans Allen-taak afvinken slaagt (gedeeld)", async () => { await seedDoc("tasks/t-allen2", { title: "x", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(-1), photos: [] }); await assertSucceeds(zlTick(S2(), "t-allen2")); });
+await t("v2-assign", "medewerker: oude taak zonder persoon afvinken slaagt (telt als Allen)", async () => { await seedDoc("tasks/t-leeg", { title: "x", description: "", assigneeId: "", assigneeName: "", status: "open", createdAt: iso(-1), photos: [] }); await assertSucceeds(zlTick(S2(), "t-leeg")); });
+await t("v2-assign", "medewerker: oude taak zonder assignee-velden afvinken slaagt", async () => { await seedDoc("tasks/t-geen", { title: "x", description: "", status: "open", createdAt: iso(-1), photos: [] }); await assertSucceeds(zlTick(S2(), "t-geen")); });
 
 // vragenlijst
 await t("v2-cfg", "admin: vragenlijst opslaan slaagt", () => assertSucceeds(A().doc("auditConfig/current").set(cfg())));
