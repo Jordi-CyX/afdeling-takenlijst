@@ -20,7 +20,8 @@
 //   batch: max. 10 eigen taken en 5 meldingen per dag per medewerker, 15 s tussen verzendingen.
 //   Dag = kalenderdag in UTC+1 (Amsterdamse wintertijd; in de zomer wisselt de dag om 01:00).
 // - Admin v24: employeeDetails/{employeeId} (extra gegevens per medewerker), alleen admin,
-//   vaste veldenlijst; geen gevoelige persoonsgegevens.
+//   vaste veldenlijst (role, department, workdays, note); geen gevoelige persoonsgegevens.
+//   Afdeling staat alleen hier, niet in employees/{id} (medewerkers en reader lezen dat).
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -316,19 +317,14 @@ service cloud.firestore {
     function isValidEmployeeDetails(employeeId) {
       let data = request.resource.data;
       return exists(/databases/$(database)/documents/employees/$(employeeId))
-        && data.keys().hasOnly(["role", "staffNumber", "contractHours", "workdays", "startDate", "note", "updatedAt"])
+        && data.keys().hasOnly(["role", "department", "workdays", "note", "updatedAt"])
         && data.updatedAt == request.time
         && (!("role" in data) || (data.role is string && data.role.trim().size() >= 1 && data.role.size() <= 40))
-        && (!("staffNumber" in data) || (data.staffNumber is string && data.staffNumber.matches("^[A-Za-z0-9]{1,20}$")))
-        && (!("contractHours" in data) || ((data.contractHours is int || data.contractHours is float)
-          && data.contractHours >= 0 && data.contractHours <= 48))
+        && (!("department" in data) || (data.department is string && data.department.trim().size() >= 1 && data.department.size() <= 40))
         && (!("workdays" in data) || (data.workdays is list
           && data.workdays.size() <= 7
           && data.workdays.toSet().size() == data.workdays.size()
           && data.workdays.toSet().hasOnly([0, 1, 2, 3, 4, 5, 6])))
-        && (!("startDate" in data) || (data.startDate is string
-          && data.startDate.matches("^(19[6-9][0-9]|20[0-9]{2})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
-          && dayOf(data.startDate) <= request.time + duration.value(366, "d")))
         && (!("note" in data) || (data.note is string && data.note.size() <= 500));
     }
 
