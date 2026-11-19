@@ -2501,18 +2501,15 @@ setupUi();
 // ---- v24: Per medewerker ----------------------------------------------------
 // Eén medewerker kiezen (dropdown) en daar alles voor doen: startcode, pincode resetten,
 // resetverzoeken en extra gegevens (employeeDetails/{id}, alleen admin).
-const DETAIL_LIMITS = { role: 40, staffNumber: 20, note: 500, hoursMax: 48 };
+const DETAIL_LIMITS = { role: 40, department: 40, note: 500 };
 
 function normalizeEmployeeDetails(id, data) {
   const d = data || {};
-  const hours = typeof d.contractHours === "number" && Number.isFinite(d.contractHours) ? d.contractHours : null;
   return {
     id,
     role: typeof d.role === "string" ? d.role.slice(0, DETAIL_LIMITS.role) : "",
-    staffNumber: typeof d.staffNumber === "string" ? d.staffNumber.slice(0, DETAIL_LIMITS.staffNumber) : "",
-    contractHours: hours,
+    department: typeof d.department === "string" ? d.department.slice(0, DETAIL_LIMITS.department) : "",
     workdays: Array.isArray(d.workdays) ? d.workdays.filter((n) => Number.isInteger(n) && n >= 0 && n <= 6) : [],
-    startDate: typeof d.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.startDate) ? d.startDate : "",
     note: typeof d.note === "string" ? d.note.slice(0, DETAIL_LIMITS.note) : "",
     updatedAt: timestampToIso(d.updatedAt)
   };
@@ -2690,9 +2687,7 @@ function fillDetailsForm(force = false) {
   if (!force && empDashDirty) return; // niet over invoer heen schrijven
   const d = employeeDetails.get(emp.id) || normalizeEmployeeDetails(emp.id, {});
   document.getElementById("det-role").value = d.role;
-  document.getElementById("det-staffnr").value = d.staffNumber;
-  document.getElementById("det-hours").value = d.contractHours == null ? "" : String(d.contractHours);
-  document.getElementById("det-start").value = d.startDate;
+  document.getElementById("det-department").value = d.department;
   document.getElementById("det-note").value = d.note;
   document.querySelectorAll("#det-workdays input").forEach((input) => {
     input.checked = d.workdays.includes(Number(input.value));
@@ -2724,27 +2719,13 @@ function readDetailsForm() {
     if (role.length > DETAIL_LIMITS.role) return { error: `Functie mag maximaal ${DETAIL_LIMITS.role} tekens zijn.` };
     payload.role = role;
   }
-  const nr = document.getElementById("det-staffnr").value.trim();
-  if (nr) {
-    if (!/^[A-Za-z0-9]{1,20}$/.test(nr)) return { error: "Personeelsnummer: alleen letters en cijfers, maximaal 20." };
-    payload.staffNumber = nr;
-  }
-  const hoursRaw = document.getElementById("det-hours").value.trim().replace(",", ".");
-  if (hoursRaw) {
-    const hours = Number(hoursRaw);
-    if (!Number.isFinite(hours) || hours < 0 || hours > DETAIL_LIMITS.hoursMax) return { error: "Contracturen moeten tussen 0 en 48 liggen." };
-    payload.contractHours = Math.round(hours * 2) / 2;
+  const department = document.getElementById("det-department").value.trim();
+  if (department) {
+    if (department.length > DETAIL_LIMITS.department) return { error: `Afdeling mag maximaal ${DETAIL_LIMITS.department} tekens zijn.` };
+    payload.department = department;
   }
   const days = [...document.querySelectorAll("#det-workdays input:checked")].map((i) => Number(i.value));
   if (days.length) payload.workdays = [...new Set(days)].sort((a, b) => a - b);
-  const start = document.getElementById("det-start").value;
-  if (start) {
-    const ms = Date.parse(`${start}T00:00:00Z`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !Number.isFinite(ms) || start < "1960-01-01" || ms > Date.now() + 365 * 86400000) {
-      return { error: "In dienst sinds: kies een geldige datum (niet meer dan een jaar vooruit)." };
-    }
-    payload.startDate = start;
-  }
   const note = document.getElementById("det-note").value.trim();
   if (note) {
     if (note.length > DETAIL_LIMITS.note) return { error: `Notitie mag maximaal ${DETAIL_LIMITS.note} tekens zijn.` };
