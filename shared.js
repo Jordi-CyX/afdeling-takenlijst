@@ -284,8 +284,26 @@ export function normalizeTask(id, data) {
     createdByEmployeeId: d.createdByEmployeeId || "",
     createdByName: d.createdByName || "",
     adminReview: typeof d.adminReview === "string" ? d.adminReview : "",
+    // Build v2: vaste locatie, spoed (alleen admin) en herkomst (audit).
+    locationId: typeof d.locationId === "string" ? d.locationId : "",
+    urgent: d.urgent === true,
+    source: normalizeSource(d.source),
     dueDate: (typeof d.dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.dueDate.trim())) ? d.dueDate.trim() : ""
   };
+}
+
+// Build v2: source = { type: "audit", auditId, auditDate, locationId, questionId, reasonId? } of null.
+export function normalizeSource(src) {
+  if (!src || typeof src !== "object" || src.type !== "audit") return null;
+  const out = {
+    type: "audit",
+    auditId: String(src.auditId || ""),
+    auditDate: String(src.auditDate || ""),
+    locationId: String(src.locationId || ""),
+    questionId: String(src.questionId || "")
+  };
+  if (src.reasonId) out.reasonId = String(src.reasonId);
+  return out;
 }
 
 export function normalizeTemplate(id, data) {
@@ -314,7 +332,9 @@ export function normalizeTemplate(id, data) {
     recurrence,
     paused: Boolean(d.paused),
     createdAt: toIso(d.createdAt || d.created) || "",
-    location: typeof d.location === "string" ? d.location : ""
+    location: typeof d.location === "string" ? d.location : "",
+    locationId: typeof d.locationId === "string" ? d.locationId : "",
+    urgent: d.urgent === true
   };
 }
 
@@ -345,6 +365,10 @@ export function serializeTask(task) {
     photos: Array.isArray(task.photos) ? task.photos : [],
     location: task.location || ""
   };
+  // Build v2: alleen meesturen als ze er zijn (de regels vergelijken met sjabloon-standaard "" / false).
+  if (task.locationId) payload.locationId = task.locationId;
+  if (task.urgent === true) payload.urgent = true;
+  if (task.source && task.source.type === "audit") payload.source = normalizeSource(task.source);
   if (task.createdByRole || task.createdByEmployeeId || task.createdByName || task.adminReview) {
     payload.createdByRole = task.createdByRole || "";
     payload.createdByEmployeeId = task.createdByEmployeeId || "";
@@ -366,7 +390,9 @@ export function serializeTemplate(template) {
     location: template.location || "",
     recurrence: template.recurrence || { type: "daily", startDate: localDateKey(new Date()) },
     paused: Boolean(template.paused),
-    createdAt: template.createdAt || new Date().toISOString()
+    createdAt: template.createdAt || new Date().toISOString(),
+    ...(template.locationId ? { locationId: template.locationId } : {}),
+    urgent: template.urgent === true
   };
 }
 
@@ -431,6 +457,8 @@ export async function generateDueInstances(templates, tasks) {
       assigneeName: template.assigneeName || "",
       photos: template.photos || [],
       location: template.location || "",
+      locationId: template.locationId || "",
+      urgent: template.urgent === true,
       status: "open",
       createdAt: new Date().toISOString(),
       pendingAt: null,
