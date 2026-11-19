@@ -1257,3 +1257,44 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   font-size: 0.72rem;
   font-weight: 600;
 }
+
+/* —— Build v2: locatiefilter, spoed, audit-herkomst —— */
+.guest-app .location-filter-row {
+  margin: -0.35rem 0 1rem;
+}
+.guest-app .location-filter-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-on-dark);
+}
+.guest-app .location-filter-row select {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  width: 100%;
+  max-width: 22rem;
+}
+.guest-app .badge.urgent {
+  background: #9B1C1C;
+  color: #fff;
+}
+.guest-app .task-origin {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #5A5556;
+  margin-top: 0.2rem;
+}
+.guest-app .task-origin.hidden { display: none; }
+#modal-origin {
+  margin: 0.15rem 0 0.5rem;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+#modal-origin.hidden { display: none; }
+.guest-app .task-item.is-urgent {
+  box-shadow: inset 0 3px 0 #9B1C1C;
+}

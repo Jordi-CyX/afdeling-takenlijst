@@ -150,6 +150,14 @@
       <button type="button" class="chip" data-filter="unassigned">Niet toegewezen</button>
       <button type="button" class="chip" data-filter="pending">Ter controle</button>
     </div>
+    <div class="location-filter-row">
+      <label for="location-filter">Pad
+        <select id="location-filter" name="location-filter">
+          <option value="all">Alle</option>
+          <option value="other">Overig</option>
+        </select>
+      </label>
+    </div>
     <p id="filter-hint" class="filter-hint hidden"></p>
     <section id="section-open" class="task-section">
       <h2 id="heading-open">Openstaande taken</h2>
@@ -167,14 +175,12 @@
       <button type="button" class="close" id="modal-close" aria-label="Sluiten">&times;</button>
       <h2 id="modal-title"></h2>
       <p id="modal-location" hidden></p>
+      <p id="modal-origin" class="task-origin hidden"></p>
       <p id="modal-assignee"></p>
       <div id="modal-status"></div>
       <div id="modal-rejection" class="rejection-note hidden"></div>
       <div id="modal-description"></div>
       <div id="modal-photos"></div>
-      <div id="tick-by-row" class="hidden">
-        <p id="tick-by-fixed">Afgevinkt door: <strong id="tick-by-name"></strong></p>
-      </div>
       <div id="modal-actions"></div>
     </div>
   </div>
@@ -199,7 +205,9 @@
         </label>
         <label>
           Locatie
-          <input type="text" id="add-task-location-input" name="location" maxlength="120" autocomplete="off">
+          <select id="add-task-location-input" name="location" required>
+            <option value="">Kies een locatie</option>
+          </select>
         </label>
         <label>
           Beschrijving

@@ -1,7 +1,8 @@
 import {
   db,
   doc,
-  updateDoc,
+  collection,
+  writeBatch,
   listenCollection,
   generateDueInstances,
   normalizeTask,
@@ -14,7 +15,7 @@ import {
   compressImage,
   isSafeImageDataUrl
 } from "./shared.js";
-import { serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+import { serverTimestamp, onSnapshot, deleteField, query, where } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import {
   getCurrentStaff,
   initStaffAuth,
@@ -27,6 +28,8 @@ let tasks = [];
 let templates = [];
 // L3: only the signed-in employee's own employees/{id} doc is read, never the list.
 let ownEmployee = null;
+let locationSettings = null;
+let ownCompletions = {};
 let currentTaskId = null;
 let knownDate = localDateKey(new Date());
 let listenersStarted = false;
@@ -35,7 +38,9 @@ let toastTimer = 0;
 
 const VIEW_KEY = "zeiklijst-view";
 const FILTER_KEY = "zeiklijst-filter";
+const LOCATION_FILTER_KEY = "zeiklijst-location-filter";
 const FILTERS = new Set(["all", "mine", "allen", "unassigned", "pending"]);
+const LOCATION_UNSET_MSG = "Locatielijst nog niet ingesteld, vraag de beheerder";
 
 const TITLE_MAX = 120;
 const LOCATION_MAX = 120;
@@ -56,6 +61,7 @@ const STAFF_TASK = {
   title: "title",
   description: "description",
   location: "location",
+  locationId: "locationId",
   assigneeId: "assigneeId",
   assigneeName: "assigneeName",
   status: "status",
@@ -80,6 +86,84 @@ const REPORT = {
 
 function appVersion() {
   return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v20";
+}
+
+// Copy v2 fields that the current shared.js normalizeTask may still omit.
+// When ZLA's shared.js starts returning them, this stays harmless.
+function enrichTask(id, data) {
+  const task = normalizeTask(id, data);
+  const d = data || {};
+  task.locationId = typeof d.locationId === "string" ? d.locationId : (typeof task.locationId === "string" ? task.locationId : "");
+  task.urgent = d.urgent === true || task.urgent === true;
+  const source = (d.source && typeof d.source === "object")
+    ? d.source
+    : (task.source && typeof task.source === "object" ? task.source : null);
+  task.source = source;
+  return task;
+}
+
+function locationItems() {
+  const items = locationSettings && Array.isArray(locationSettings.items) ? locationSettings.items : [];
+  return items
+    .filter((item) => item && typeof item.id === "string" && item.id)
+    .slice()
+    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+}
+
+function activeLocationItems() {
+  return locationItems().filter((item) => item.active !== false);
+}
+
+function locationsReady() {
+  return activeLocationItems().length > 0;
+}
+
+function locationLabelById(id) {
+  if (!id) return "";
+  const hit = locationItems().find((item) => item.id === id);
+  if (hit && hit.label) return String(hit.label);
+  const labels = locationSettings && locationSettings.labels && typeof locationSettings.labels === "object"
+    ? locationSettings.labels
+    : {};
+  return labels[id] ? String(labels[id]) : "";
+}
+
+function taskLocationText(task) {
+  return locationLabelById(task && task.locationId) || String((task && task.location) || "").trim();
+}
+
+function isUrgent(task) {
+  return Boolean(task && task.urgent === true);
+}
+
+function formatAuditDate(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : "";
+}
+
+function auditOriginText(task) {
+  const source = task && task.source;
+  if (!source || typeof source !== "object" || source.type !== "audit") return "";
+  const date = formatAuditDate(source.auditDate);
+  const loc = locationLabelById(source.locationId);
+  return ["Audit", date, loc].filter(Boolean).join(" · ");
+}
+
+function currentLocationFilter() {
+  const value = localStorage.getItem(LOCATION_FILTER_KEY) || "all";
+  return value || "all";
+}
+
+function setLocationFilter(value) {
+  localStorage.setItem(LOCATION_FILTER_KEY, value || "all");
+  renderTasks();
+}
+
+function matchesLocationFilter(task, locFilter) {
+  if (!locFilter || locFilter === "all") return true;
+  if (locFilter === "other") return !task.locationId;
+  return task.locationId === locFilter;
 }
 
 function isStaffCreated(task) {
@@ -219,7 +303,7 @@ function startListeners() {
   if (listenersStarted) return;
   listenersStarted = true;
   accessLostHandled = false;
-  unsubscribers.push(listenCollection("tasks", normalizeTask, (list) => {
+  unsubscribers.push(listenCollection("tasks", enrichTask, (list) => {
     tasks = list;
     renderTasks();
     if (currentTaskId) openTask(currentTaskId);
@@ -231,6 +315,29 @@ function startListeners() {
   }, onListenerError));
   const staff = getCurrentStaff();
   if (staff && staff.employeeId) {
+    unsubscribers.push(onSnapshot(doc(db, "settings", "locations"), (snap) => {
+      locationSettings = snap.exists() ? (snap.data() || {}) : null;
+      fillLocationSelect();
+      fillLocationFilter();
+      renderTasks();
+      if (currentTaskId) openTask(currentTaskId);
+    }, (err) => {
+      locationSettings = null;
+      fillLocationSelect();
+      fillLocationFilter();
+      renderTasks();
+      if (!isPermissionDenied(err)) onListenerError(err);
+    }));
+    const completionsQuery = query(
+      collection(db, "taskCompletions"),
+      where("employeeId", "==", staff.employeeId)
+    );
+    unsubscribers.push(onSnapshot(completionsQuery, (snap) => {
+      const next = {};
+      (snap.docs || []).forEach((item) => { next[item.id] = item.data() || {}; });
+      ownCompletions = next;
+      if (currentTaskId) openTask(currentTaskId);
+    }, onListenerError));
     unsubscribers.push(onSnapshot(doc(db, "employees", staff.employeeId), (snap) => {
       if (!snap.exists()) {
         onListenerError({ code: "permission-denied" });
@@ -252,6 +359,8 @@ function startListeners() {
 }
 
 function stopListeners() {
+  ownCompletions = {};
+  locationSettings = null;
   unsubscribers.forEach((stop) => {
     try {
       if (typeof stop === "function") stop();
@@ -295,6 +404,13 @@ function setupUi() {
     if (!btn) return;
     setFilter(btn.dataset.filter);
   });
+  const locationFilter = document.getElementById("location-filter");
+  if (locationFilter) {
+    fillLocationFilter();
+    locationFilter.addEventListener("change", (event) => {
+      setLocationFilter(event.target.value);
+    });
+  }
   setupHeaderMenu();
   setupLightbox();
   setupStaffPages();
@@ -360,12 +476,6 @@ function checkDateChange() {
   }
 }
 
-function fillTickName() {
-  const el = document.getElementById("tick-by-name");
-  const staff = getCurrentStaff();
-  if (el) el.textContent = staff && staff.name ? staff.name : "";
-}
-
 function renderFilterHint() {
   const hint = document.getElementById("filter-hint");
   hint.textContent = "";
@@ -380,6 +490,52 @@ function renderChips() {
     btn.setAttribute("aria-pressed", String(on));
   });
   renderFilterHint();
+}
+
+function fillLocationFilter() {
+  const sel = document.getElementById("location-filter");
+  if (!sel) return;
+  const current = currentLocationFilter();
+  sel.replaceChildren();
+  const add = (value, label) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    sel.append(option);
+  };
+  add("all", "Alle");
+  locationItems().forEach((item) => add(item.id, item.label || item.id));
+  add("other", "Overig");
+  const allowed = new Set([...sel.options].map((option) => option.value));
+  const next = allowed.has(current) ? current : "all";
+  sel.value = next;
+  if (next !== current) {
+    try { localStorage.setItem(LOCATION_FILTER_KEY, next); } catch { /* ignore */ }
+  }
+}
+
+function fillLocationSelect() {
+  const sel = document.getElementById("add-task-location-input");
+  if (!sel) return;
+  const current = sel.value;
+  const ready = locationsReady();
+  sel.replaceChildren();
+  const first = document.createElement("option");
+  first.value = "";
+  first.textContent = ready ? "Kies een locatie" : "Niet beschikbaar";
+  sel.append(first);
+  activeLocationItems().forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.label || item.id;
+    sel.append(option);
+  });
+  if (current && activeLocationItems().some((item) => item.id === current)) sel.value = current;
+  sel.disabled = !ready;
+  sel.required = ready;
+  const form = document.getElementById("staff-add-task-form");
+  const submit = form && form.querySelector("button[type=submit]");
+  if (submit && form && form.dataset.busy !== "1") submit.disabled = !ready;
 }
 
 function bindList(list) {
@@ -397,13 +553,23 @@ function bindList(list) {
 
 function renderTasks() {
   const filter = currentFilter();
-  const visible = tasks.filter((task) => task.status !== "afgerond" && matchesFilter(task, filter));
+  const locFilter = currentLocationFilter();
+  const visible = tasks.filter((task) => (
+    task.status !== "afgerond"
+    && matchesFilter(task, filter)
+    && matchesLocationFilter(task, locFilter)
+  ));
+  const byUrgencyThen = (stampFn) => (a, b) => {
+    const urgentDiff = Number(isUrgent(b)) - Number(isUrgent(a));
+    if (urgentDiff) return urgentDiff;
+    return stampFn(a).localeCompare(stampFn(b));
+  };
   const openTasks = visible
     .filter((task) => task.status === "open")
-    .sort((a, b) => createdStamp(a).localeCompare(createdStamp(b)));
+    .sort(byUrgencyThen(createdStamp));
   const pendingTasks = visible
     .filter((task) => task.status === "pending")
-    .sort((a, b) => pendingStamp(a).localeCompare(pendingStamp(b)));
+    .sort(byUrgencyThen(pendingStamp));
 
   const openList = document.getElementById("task-list");
   const pendingList = document.getElementById("pending-list");
@@ -466,6 +632,7 @@ const KNOWN_STATUSES = new Set(["open", "pending", "afgerond"]);
 
 function badgeElements(task) {
   const badges = [];
+  if (isUrgent(task)) badges.push(el("span", "badge urgent", "Spoed"));
   if (task.status === "open" && wasRejected(task)) badges.push(el("span", "badge rejected", "Afgewezen"));
   if (task.status === "pending") badges.push(el("span", "badge pending", "Ter controle"));
   if (isRecurring(task)) badges.push(el("span", "badge recurring", "Herhalend"));
@@ -485,13 +652,15 @@ function rejectionByLabel(by) {
 }
 
 function taskItemElement(task) {
-  const location = (task.location || "").trim();
+  const location = taskLocationText(task);
+  const origin = auditOriginText(task);
   const assignee = assigneeLabel(task);
   const unassigned = assignee === "Niet toegewezen";
   const age = formatRelativeAge(task.createdAt);
 
   const item = el("div", "task-item");
   if (KNOWN_STATUSES.has(task.status)) item.classList.add(task.status);
+  if (isUrgent(task)) item.classList.add("is-urgent");
   item.setAttribute("role", "button");
   item.tabIndex = 0;
   item.dataset.taskId = String(task.id);
@@ -501,6 +670,7 @@ function taskItemElement(task) {
   textCol.append(
     el("div", "task-title", task.title || ""),
     el("div", "task-location" + (location ? "" : " hidden"), location),
+    el("div", "task-origin" + (origin ? "" : " hidden"), origin),
     el("div", "task-age" + (age ? "" : " hidden"), age)
   );
   main.append(textCol);
@@ -522,10 +692,16 @@ function openTask(id) {
   }
   currentTaskId = id;
   document.getElementById("modal-title").textContent = task.title;
-  const location = (task.location || "").trim();
+  const location = taskLocationText(task);
   const locEl = document.getElementById("modal-location");
   locEl.textContent = location;
   locEl.hidden = !location;
+  const origin = auditOriginText(task);
+  const originEl = document.getElementById("modal-origin");
+  if (originEl) {
+    originEl.textContent = origin;
+    originEl.classList.toggle("hidden", !origin);
+  }
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
   document.getElementById("modal-status").replaceChildren(...badgeElements(task));
 
@@ -551,10 +727,6 @@ function openTask(id) {
     const age = formatRelativeAge(task.createdAt);
     extra.push(`Aangemaakt op ${formatDateTime(task.createdAt)}${age ? ` (${age})` : ""}`);
   }
-  if (task.pendingAt) {
-    const by = task.pendingBy ? ` door ${task.pendingBy}` : "";
-    extra.push(`Afgevinkt op ${formatDateTime(task.pendingAt)}${by}`);
-  }
   const descEl = document.getElementById("modal-description");
   const descP = el("p", "modal-description-text", task.description || "");
   descP.style.whiteSpace = "pre-line";
@@ -577,9 +749,6 @@ function openTask(id) {
   document.getElementById("modal-photos").replaceChildren(...photoEls);
 
   const allowed = canToggle(task);
-  const tickRow = document.getElementById("tick-by-row");
-  tickRow.classList.toggle("hidden", task.status !== "open" || !allowed);
-  if (task.status === "open" && allowed) fillTickName();
 
   const actions = document.getElementById("modal-actions");
   actions.replaceChildren();
@@ -640,11 +809,17 @@ function canToggle(task) {
   return assigneeId === staff.employeeId || assigneeId === "ALLEN" || assigneeId === "";
 }
 
-// Untick only by whoever ticked it (or legacy ticks without pendingByEmployeeId).
+// Untick only with an own taskCompletions doc; old pending tasks without a
+// doc fall back to pendingByEmployeeId == me (or a missing id, as before).
 function canUntick(task) {
   const staff = getCurrentStaff();
-  const by = task && task.pendingByEmployeeId != null ? String(task.pendingByEmployeeId) : "";
-  return Boolean(staff) && (by === "" || by === staff.employeeId);
+  if (!staff || !task || task.status !== "pending") return false;
+  if (Object.prototype.hasOwnProperty.call(ownCompletions, task.id)) {
+    const mine = ownCompletions[task.id];
+    return !mine.employeeId || mine.employeeId === staff.employeeId;
+  }
+  const by = task.pendingByEmployeeId != null ? String(task.pendingByEmployeeId) : "";
+  return by === "" || by === staff.employeeId;
 }
 
 let toggleBusy = false;
@@ -673,19 +848,25 @@ async function markPending(id) {
     return;
   }
   const staff = getCurrentStaff();
-  // Must equal the own employees doc name (rules); pendingByEmployeeId is required.
-  const pendingBy = staff ? officialStaffName().slice(0, 60) : "";
-  if (!pendingBy) {
+  const name = staff ? officialStaffName().slice(0, 60) : "";
+  if (!staff || !staff.employeeId || !name) {
     showToast("Je bent niet ingelogd.", "error");
     return;
   }
   try {
-    await updateDoc(doc(db, "tasks", id), {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "tasks", id), {
       status: "pending",
-      pendingAt: new Date().toISOString(),
-      pendingBy,
-      pendingByEmployeeId: staff.employeeId
+      pendingAt: deleteField(),
+      pendingBy: deleteField(),
+      pendingByEmployeeId: deleteField()
     });
+    batch.set(doc(db, "taskCompletions", id), {
+      employeeId: staff.employeeId,
+      name,
+      at: serverTimestamp()
+    });
+    await batch.commit();
     closeModal();
     showToast("Taak is ter controle gezet.", "success");
   } catch (err) {
@@ -701,12 +882,20 @@ async function unmarkPending(id) {
     return;
   }
   try {
-    await updateDoc(doc(db, "tasks", id), {
-      status: "open",
-      pendingAt: null,
-      pendingBy: null,
-      pendingByEmployeeId: null
-    });
+    const batch = writeBatch(db);
+    const hasOwnCompletion = Object.prototype.hasOwnProperty.call(ownCompletions, id);
+    if (hasOwnCompletion) {
+      batch.update(doc(db, "tasks", id), { status: "open" });
+      batch.delete(doc(db, "taskCompletions", id));
+    } else {
+      batch.update(doc(db, "tasks", id), {
+        status: "open",
+        pendingAt: deleteField(),
+        pendingBy: deleteField(),
+        pendingByEmployeeId: deleteField()
+      });
+    }
+    await batch.commit();
     closeModal();
     showToast("Afvinken ongedaan gemaakt.", "success");
   } catch (err) {
@@ -834,12 +1023,14 @@ function openAddTaskPage() {
     preview.classList.add("hidden");
   }
   setFormError("add-task-error", "");
+  fillLocationSelect();
+  if (!locationsReady()) setFormError("add-task-error", LOCATION_UNSET_MSG);
   const assignee = document.getElementById("add-task-assignee");
   if (assignee) assignee.textContent = officialStaffName();
   const page = document.getElementById("add-task-page");
   if (page) page.classList.remove("hidden");
   const title = document.getElementById("add-task-title-input");
-  if (title) {
+  if (title && locationsReady()) {
     try { title.focus(); } catch { /* ignore */ }
   }
 }
@@ -900,9 +1091,11 @@ function writeFormError(err, permissionText, fallback) {
 
 function setFormBusy(form, busy) {
   if (!form) return;
-  form.querySelectorAll("button, input, textarea").forEach((el) => {
+  form.dataset.busy = busy ? "1" : "0";
+  form.querySelectorAll("button, input, textarea, select").forEach((el) => {
     el.disabled = Boolean(busy);
   });
+  if (!busy && form.id === "staff-add-task-form") fillLocationSelect();
 }
 
 async function onAddTaskSubmit(event) {
@@ -912,8 +1105,14 @@ async function onAddTaskSubmit(event) {
     setFormError("add-task-error", "Je bent niet ingelogd.");
     return;
   }
+  if (!locationsReady()) {
+    setFormError("add-task-error", LOCATION_UNSET_MSG);
+    return;
+  }
   const title = document.getElementById("add-task-title-input").value.trim();
-  const location = document.getElementById("add-task-location-input").value.trim();
+  const locationId = document.getElementById("add-task-location-input").value.trim();
+  const chosen = activeLocationItems().find((item) => item.id === locationId);
+  const location = chosen ? String(chosen.label || "").trim() : "";
   const description = document.getElementById("add-task-description-input").value.trim();
   if (!title) {
     setFormError("add-task-error", "Vul een titel in.");
@@ -921,6 +1120,10 @@ async function onAddTaskSubmit(event) {
   }
   if (title.length > TITLE_MAX) {
     setFormError("add-task-error", `De titel mag maximaal ${TITLE_MAX} tekens zijn.`);
+    return;
+  }
+  if (!locationId || !chosen || !location) {
+    setFormError("add-task-error", "Kies een locatie.");
     return;
   }
   if (location.length > LOCATION_MAX) {
@@ -951,6 +1154,7 @@ async function onAddTaskSubmit(event) {
       [F.title]: title,
       [F.description]: description,
       [F.location]: location,
+      [F.locationId]: locationId,
       [F.assigneeId]: staff.employeeId,
       [F.assigneeName]: name,
       [F.status]: "open",
