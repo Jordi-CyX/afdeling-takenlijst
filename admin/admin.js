@@ -59,8 +59,11 @@ import {
   exportRawBackup,
   taskMatchesAudit,
   sourceText,
-  v2SubView
+  v2SubView,
+  isV2Busy,
+  saveDraftNow
 } from "./v2.js";
+import { decideWaiting, decideReload, makeGuard, readGuard, RELOAD_GUARD_KEY, UPDATE_CHECK_MS, UPDATE_BAR_TEXT } from "./update-guard.js";
 
 let isAdmin = false;
 let tasks = [];
@@ -82,6 +85,10 @@ let migratingDueDates = false;
 let startCodes = [];
 let employeesReady = false;
 let swUpdateHandlerBound = false;
+let hadSwController = "serviceWorker" in navigator && Boolean(navigator.serviceWorker.controller);
+let swReg = null;
+let swUpdatePending = false;
+let formDirty = false;
 let employeeDetails = new Map();
 let staffCounters = new Map();
 let empDashId = "";
@@ -1122,30 +1129,75 @@ function setupUi() {
   setupServiceWorkerUpdates();
 }
 
+// ---------- Auto-verversen (eigenaar 13:31; zelfde patroon als de staff-app) ----------
+// Zie admin/update-guard.js voor de beslisregels en zla-build-v2-fixes.md "Auto-verversen".
+
+// Tekstinvoer in een formulier telt als "niet-bewaard" tot opslaan, annuleren of een andere pagina.
+function trackFormDirty() {
+  const app = document.getElementById("admin-app");
+  if (!app || app.dataset.dirtyBound) return;
+  app.dataset.dirtyBound = "1";
+  app.addEventListener("input", (event) => {
+    const el = event.target;
+    if (!el.matches || !el.matches("textarea, input:not([type=checkbox]):not([type=radio]):not([type=file])")) return;
+    if (el.closest(".filters, .filter-row, .task-filters, [data-no-dirty]") || /^(filter|search)/i.test(el.id || "")) return;
+    formDirty = true;
+  });
+  app.addEventListener("submit", () => setTimeout(() => { formDirty = false; }, 0), true);
+}
+
+function isAppBusy() {
+  if (formDirty) return true;
+  if (document.querySelector(".modal:not(.hidden), #app-dialog:not(.hidden), #image-lightbox:not(.hidden)")) return true;
+  return isV2Busy();
+}
+
+function applyWaitingWorker() {
+  const bar = document.getElementById("update-bar");
+  const worker = swReg && swReg.waiting;
+  const decision = decideWaiting({ hasWaiting: Boolean(worker), hadController: hadSwController, busy: isAppBusy() });
+  swUpdatePending = decision === "bar";
+  if (bar) bar.classList.toggle("hidden", decision !== "bar");
+  if (decision === "skip") worker.postMessage({ type: "SKIP_WAITING" });
+}
+
 function setupServiceWorkerUpdates() {
   if (!("serviceWorker" in navigator)) return;
+  trackFormDirty();
+  if (swUpdateHandlerBound) return;
+  swUpdateHandlerBound = true;
   const bar = document.getElementById("update-bar");
-  const offer = (worker) => {
-    if (!bar || !worker) return;
-    bar.classList.remove("hidden");
-    bar.onclick = () => worker.postMessage({ type: "SKIP_WAITING" });
-  };
-  navigator.serviceWorker.register("./sw.js").then((reg) => {
-    if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+  if (bar) {
+    bar.textContent = UPDATE_BAR_TEXT;
+    bar.onclick = async () => {
+      bar.disabled = true;
+      await saveDraftNow(); // eerst het audit-concept bewaren
+      const worker = swReg && swReg.waiting;
+      if (worker) worker.postMessage({ type: "SKIP_WAITING" });
+      else bar.disabled = false;
+    };
+  }
+  const check = () => { if (swReg) swReg.update().catch(() => {}); };
+  navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((reg) => {
+    swReg = reg;
+    applyWaitingWorker();
     reg.addEventListener("updatefound", () => {
       const worker = reg.installing;
       if (!worker) return;
-      worker.addEventListener("statechange", () => {
-        if (worker.state === "installed" && navigator.serviceWorker.controller) offer(worker);
-      });
+      worker.addEventListener("statechange", () => { if (worker.state === "installed") applyWaitingWorker(); });
     });
+    check(); // bij openen
   }).catch(() => {});
-  if (swUpdateHandlerBound) return;
-  swUpdateHandlerBound = true;
-  let reloading = false;
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
+  setInterval(check, UPDATE_CHECK_MS);
+  // Wacht er een update terwijl de gebruiker bezig is? Zodra hij klaar is gaat de update vanzelf door.
+  setInterval(() => { if (swUpdatePending) applyWaitingWorker(); }, 2000);
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (reloading) return;
-    reloading = true;
+    const now = Date.now();
+    const decision = decideReload({ hadController: hadSwController, guard: readGuard(sessionStorage.getItem(RELOAD_GUARD_KEY)), now });
+    hadSwController = true; // na de eerste installatie gelden volgende wissels als update
+    if (decision !== "reload") return;
+    sessionStorage.setItem(RELOAD_GUARD_KEY, makeGuard(now));
     window.location.reload();
   });
 }
@@ -1420,6 +1472,7 @@ function updatePhotosChosen() {
 }
 
 function resetTaskForm() {
+  formDirty = false;
   editingTemplateId = null;
   editingTaskId = null;
   document.getElementById("add-task-form").reset();
@@ -1573,6 +1626,7 @@ function closeNav() {
 }
 
 function showSection(name, persist = true, options = {}) {
+  formDirty = false;
   const section = SECTIONS.includes(name) ? name : "dashboard";
   currentSection = section;
   if (persist) localStorage.setItem(SECTION_KEY, section);

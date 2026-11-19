@@ -1187,3 +1187,11 @@ details.fold:not([open]) > .fold-summary::after { content: "▸ Uitklappen"; }
 body.print-mode .app-version-bar { display: none; }
 @media print { .app-version-bar { display: none; } }
 #data-v2 .form-actions + .section-intro { margin-top: 0.75rem; }
+
+/* Auto-verversen (13:31): balk ONDERAAN in de (sticky) header, dus nooit over knoppen, versielabel of footer heen */
+header .update-bar {
+  position: static; display: block; width: calc(100% + 2.5rem + var(--safe-left, 0px) + var(--safe-right, 0px));
+  margin: 0.7rem calc(-1.25rem - var(--safe-right, 0px)) -0.95rem calc(-1.25rem - var(--safe-left, 0px));
+  min-height: 44px; border-radius: 0; background: var(--accent); color: #231F20; font-size: 0.95rem; font-weight: 700;
+}
+header .update-bar.hidden { display: none; }

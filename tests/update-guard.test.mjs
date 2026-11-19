@@ -1,0 +1,21 @@
+// Unit-tests voor de auto-verversen-beslissingen. Draai: node tests/update-guard.test.mjs
+import { decideWaiting as w, decideReload as r, makeGuard, readGuard, RELOAD_GUARD_MS, RELOAD_GUARD_KEY } from "../admin/update-guard.js";
+const results = [];
+const t = (name, got, want) => results.push([got === want ? "PASS" : "FAIL", name, got === want ? "" : `${got} != ${want}`]);
+const now = 1_800_000_000_000;
+t("sleutel is zeiklijst-admin-sw-reload (niet die van de staff-app)", RELOAD_GUARD_KEY, "zeiklijst-admin-sw-reload");
+t("guardvenster is 30 s", RELOAD_GUARD_MS, 30000);
+t("wachtende worker, niet bezig -> SKIP_WAITING", w({ hasWaiting: true, hadController: true, busy: false }), "skip");
+t("wachtende worker, bezig -> balk", w({ hasWaiting: true, hadController: true, busy: true }), "bar");
+t("geen wachtende worker -> niets", w({ hasWaiting: false, hadController: true, busy: false }), "none");
+t("eerste installatie (geen controller) -> niets", w({ hasWaiting: true, hadController: false, busy: false }), "none");
+t("controllerchange, eerste installatie -> niet herladen", r({ hadController: false, guard: null, now }), "none");
+t("controllerchange, geen guard -> herladen", r({ hadController: true, guard: null, now }), "reload");
+t("controllerchange binnen 30 s na vorige herlaad -> niet herladen (geen lus)", r({ hadController: true, guard: readGuard(makeGuard(now - 10000)), now }), "none");
+t("controllerchange na > 30 s -> herladen", r({ hadController: true, guard: readGuard(makeGuard(now - RELOAD_GUARD_MS - 1)), now }), "reload");
+t("kapotte guard telt als geen guard", readGuard("{kapot"), null);
+t("guard zonder flag telt als geen guard", readGuard('{"at":1}'), null);
+for (const x of results) console.log(x.join(" | "));
+const pass = results.filter((x) => x[0] === "PASS").length;
+console.log(`${pass}/${results.length} PASS`);
+process.exit(pass === results.length ? 0 : 1);

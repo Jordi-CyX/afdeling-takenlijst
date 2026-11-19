@@ -9,6 +9,7 @@ const ASSETS = [
   "./audit-defaults.js",
   "./version.js",
   "./xlsx-export.js",
+  "./update-guard.js",
   "./admin.css",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
@@ -35,6 +36,7 @@ self.addEventListener("install", (event) => {
   );
 });
 
+// Auto-verversen: GEEN automatische skipWaiting bij install; de pagina stuurt SKIP_WAITING als de gebruiker niet bezig is.
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
     self.skipWaiting();
@@ -44,6 +46,7 @@ self.addEventListener("message", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
+      // Alleen eigen caches ("zeiklijst-admin-"), nooit die van de staff-app ("zeiklijst-v*").
       Promise.all(keys.filter((key) => key !== CACHE_NAME && key.startsWith("zeiklijst-admin-")).map((key) => caches.delete(key)))
     ).then(() => self.clients.claim())
   );

@@ -327,6 +327,7 @@ function toPlain(value) {
 }
 
 export async function exportRawBackup() {
+  exportBusy += 1;
   try {
     const out = { version: 4, kind: "zeiklijst-raw-backup", exportedAt: new Date().toISOString(), collections: {} };
     for (const name of BACKUP_COLLECTIONS) {
@@ -355,6 +356,8 @@ export async function exportRawBackup() {
   } catch {
     ctx.showToast("Back-up maken is mislukt.");
     return false;
+  } finally {
+    exportBusy -= 1;
   }
 }
 
@@ -362,6 +365,7 @@ export async function exportRawBackup() {
 // Alleen collecties met een vaste kolomlijst; geheimen (staffAccounts, startCodes, nameIndex, pins) worden niet eens gelezen.
 const EXCEL_COLLECTIONS = ["tasks", "taskMeta", "taskCompletions", "recurring", "employees", "employeeDetails", "reports", "audits"];
 export async function exportExcel() {
+  exportBusy += 1;
   try {
     const data = {};
     for (const name of EXCEL_COLLECTIONS) {
@@ -386,6 +390,8 @@ export async function exportExcel() {
   } catch {
     ctx.showToast("Excel-export maken is mislukt.");
     return false;
+  } finally {
+    exportBusy -= 1;
   }
 }
 
@@ -556,6 +562,28 @@ function scheduleSave(immediate = false) {
 
 function flushDraft() {
   if (savePending) scheduleSave(true);
+}
+
+// Auto-verversen: vóór herladen het concept bewaren (max. 3 s wachten op de server).
+export async function saveDraftNow() {
+  clearTimeout(draftSaveTimer);
+  savePending = false;
+  if (!draft || finishing) return;
+  try {
+    await Promise.race([saveDraft(), new Promise((res) => setTimeout(res, 3000))]);
+  } catch {
+    // offline of mislukt: de Firestore-wachtrij bewaart de write lokaal
+  }
+}
+
+let exportBusy = 0;
+// Auto-verversen: niet herladen tijdens Audit lopen, vraag-editor, export of print.
+export function isV2Busy() {
+  const auditVisible = !document.getElementById("section-audit")?.classList.contains("hidden");
+  if (draft && auditMode !== "start" && auditVisible) return true;
+  if (savePending || finishing || exportBusy > 0) return true;
+  if (document.body.classList.contains("print-mode")) return true;
+  return Boolean(document.querySelector("[data-q-form]"));
 }
 
 async function saveDraft() {
