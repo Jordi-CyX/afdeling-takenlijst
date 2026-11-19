@@ -21,7 +21,7 @@ Er is geen admin-login in de medewerkers-app.
 
 Open de Admin-app en log in met e-mail en wachtwoord (typ het e-mailadres zelf; er staat niets vooringevuld). De app gebruikt de HORNBACH-kleuren (`#3A3C3E`, accent `#F99D27`) en het lettertype **Rubik Distressed** (OFL) voor de kop in de menubanner.
 
-- **Dashboard**: aanklikbare totalen voor open (naar Taken, gefilterd) en pending (naar Controle), de *actuele* open/pending-verdeling per medewerker (inclusief Allen en Niet toegewezen), en een korte lijst van de laatste pending taken. Afgerond blijft als kleiner cijfer staan.
+- **Dashboard**: drie aanklikbare tegels: Openstaand (naar Taken, gefilterd), Pending (naar Controle) en Streefdatum (verstreken + binnenkort). Taken zonder persoon heten overal 'Allen'. Op desktop staan de menuknoppen onder de tegels.
 - Taken **toevoegen** en **bewerken** (titel verplicht; locatie, beschrijving en foto's optioneel, max. 4 gecomprimeerde foto's). Het formulier "Nieuwe taak" staat standaard ingeklapt. Zoeken en filteren kan op status, medewerker, locatie en herhalend.
 - Optionele **streefdatum** bij eenmalige taken. Op kaarten en in de details staat “Streefdatum dd-mm-jjjj”. Is die datum verstreken en de taak nog niet afgerond, dan verschijnt een rood/magenta badge, een dashboardkaart **Streefdatum verstreken** (aantal + lijst) en een filter in Taken.
 - Een bestaande taak **opnieuw toewijzen**

@@ -41,6 +41,13 @@ const MAX_EDGE = 1000;
 const JPEG_QUALITY = 0.6;
 const MAX_DOC_BYTES = 700 * 1024;
 
+// Datum (JJJJ-MM-DD) in Europe/Amsterdam, onafhankelijk van de tijdzone van het toestel.
+export function amsterdamDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Amsterdam", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  const get = (t) => (parts.find((p) => p.type === t) || {}).value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
 export function localDateKey(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -195,7 +202,7 @@ export function assigneeLabel(task) {
   if (task.assigneeId === "ALLEN") return "Allen";
   if (task.assigneeName) return task.assigneeName;
   if (task.assignee) return task.assignee;
-  return "Niet toegewezen";
+  return "Allen"; // eigenaar 12:20/13:01: zonder persoon = Allen (geen "Niet toegewezen")
 }
 
 export function occurrenceInMonth(year, month, day) {
@@ -310,8 +317,8 @@ export function normalizeTemplate(id, data) {
   const d = data || {};
   const recurrence = d.recurrence && typeof d.recurrence === "object"
     ? { ...d.recurrence }
-    : { type: "daily", startDate: localDateKey(new Date()) };
-  if (!recurrence.startDate) recurrence.startDate = localDateKey(new Date());
+    : { type: "daily", startDate: amsterdamDateKey() };
+  if (!recurrence.startDate) recurrence.startDate = amsterdamDateKey();
   let assigneeId = d.assigneeId || "";
   let assigneeName = d.assigneeName || "";
   if (!assigneeId && d.assignee) {
@@ -388,7 +395,7 @@ export function serializeTemplate(template) {
     assigneeName: template.assigneeName || "",
     photos: Array.isArray(template.photos) ? template.photos : [],
     location: template.location || "",
-    recurrence: template.recurrence || { type: "daily", startDate: localDateKey(new Date()) },
+    recurrence: template.recurrence || { type: "daily", startDate: amsterdamDateKey() },
     paused: Boolean(template.paused),
     createdAt: template.createdAt || new Date().toISOString(),
     ...(template.locationId ? { locationId: template.locationId } : {}),
@@ -443,7 +450,7 @@ export function assertDocSize(payload, extraMessage = "") {
 }
 
 export async function generateDueInstances(templates, tasks) {
-  const today = localDateKey(new Date());
+  const today = amsterdamDateKey();
   for (const template of templates) {
     if (template.paused) continue;
     const due = latestDueOnOrBefore(template, today);

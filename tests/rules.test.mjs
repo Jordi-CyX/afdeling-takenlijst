@@ -522,6 +522,19 @@ await t("v2-reader", "reader: report wijzigen/wissen faalt", async () => { await
 await t("v2-reader", "reader: employeeDetails/taskCompletions/pinResetRequests faalt", async () => { await assertFails(RD().collection("employeeDetails").get()); await assertFails(RD().collection("taskCompletions").get()); await assertFails(RD().collection("pinResetRequests").get()); });
 await t("v2-reader", "medewerker: reports lezen faalt nog steeds", () => assertFails(S2().collection("reports").get()));
 
+// --- Review-fixes (13:01): admin-locatie verplicht alleen in de UI; herstel/noodknop blijven werken ---
+await t("rv-fix", "admin: herstel oude taak zonder locationId (import/back-up) slaagt", () => assertSucceeds(A().doc("tasks/rv-legacy").set({ title: "Oud", description: "", assignee: "", status: "open", createdAt: iso(-3), photos: [], location: "Ergens" })));
+await t("rv-fix", "admin: herstel oud sjabloon zonder locationId slaagt", () => assertSucceeds(A().doc("recurring/rv-tpl").set({ title: "Oud sjabloon", description: "", location: "", assignee: "", photos: [], paused: false, createdAt: iso(-3), recurrence: { type: "daily", startDate: ymd(-3) } })));
+await t("rv-fix", "admin: oude taak bewerken met locatie, oude tekst blijft (K5) slaagt", async () => { await seedDoc("tasks/rv-k5", { title: "Oud", description: "", assignee: "", status: "open", createdAt: iso(-3), photos: [], location: "pad 16 links" }); await assertSucceeds(A().doc("tasks/rv-k5").update({ title: "Nieuw", locationId: "pad-16" })); });
+await t("rv-fix", "admin: noodknop zet afvinker terug op taak en wist taskCompletions slaagt", async () => {
+  await seedDoc("tasks/rv-pend", { title: "P", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [], locationId: "pad-16", location: "Pad 16" });
+  await seedDoc("taskCompletions/rv-pend", { employeeId: J.employeeId, name: "Jane", at: TS.now() });
+  const db = A(); const b = db.batch();
+  b.update(db.doc("tasks/rv-pend"), { pendingBy: "Jane", pendingByEmployeeId: J.employeeId, pendingAt: new Date().toISOString() });
+  b.delete(db.doc("taskCompletions/rv-pend"));
+  await assertSucceeds(b.commit());
+});
+
 // --- Reader en admin ---
 await t("reader", "reader: tasks en employees lezen slaagt", async () => { const db = env.authenticatedContext(READER).firestore(); await assertSucceeds(db.collection("tasks").get()); await assertSucceeds(db.collection("employees").get()); });
 await t("reader", "reader: geen startCodes/nameIndex/schrijven", async () => { const db = env.authenticatedContext(READER).firestore(); await assertFails(db.collection("startCodes").get()); await assertFails(db.collection("nameIndex").get()); await assertFails(db.doc("tasks/t1").update({ title: "x" })); });
