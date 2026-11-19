@@ -41,23 +41,14 @@ function isAdminPath(url) {
   return url.pathname.includes("/admin/");
 }
 
-// Workers from the maintenance period (v17) auto-activated and have no update
-// banner, so a phone still on the maintenance screen could never tap
-// "Nieuwe versie beschikbaar". Only in that case this worker takes over by
-// itself; otherwise it waits for SKIP_WAITING from the update banner.
-const MAINTENANCE_CACHES = ["zeiklijst-v17"];
-
-async function replacingMaintenanceWorker() {
-  if (!self.registration.active) return false;
-  const keys = await caches.keys();
-  return keys.some((key) => MAINTENANCE_CACHES.includes(key));
-}
-
+// Do not skipWaiting on install: the page activates a waiting worker with
+// SKIP_WAITING when the user is idle (or taps the update banner). The
+// maintenance screen (maintenance.js) also sends SKIP_WAITING, so v20
+// takes over from zeiklijst-v19-onderhoud by itself.
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await cache.addAll(ASSETS);
-    if (await replacingMaintenanceWorker()) await self.skipWaiting();
   })());
 });
 

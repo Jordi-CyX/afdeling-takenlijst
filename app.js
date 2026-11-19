@@ -1435,38 +1435,166 @@ function setupStaffPages() {
 function setupUpdateBanner() {
   const banner = document.getElementById("update-banner");
   if (!banner) return;
+  banner.textContent = "Nieuwe versie, tik om te verversen";
+  banner.style.position = "fixed";
+  banner.style.top = "0";
+  banner.style.zIndex = "1300";
+
+  const RELOAD_GUARD_KEY = "zeiklijst-sw-reload";
+  const RELOAD_GUARD_MS = 30 * 1000;
+  const UPDATE_CHECK_MS = 5 * 60 * 1000;
+  const BUSY_IDS = ["modal", "add-task-page", "report-page", "lightbox", "header-more-menu"];
+  const DRAFT_IDS = [
+    "add-task-title-input",
+    "add-task-description-input",
+    "add-task-location-input",
+    "add-task-photo",
+    "report-description",
+    "report-photo",
+    "staff-code-input",
+    "staff-pin-new",
+    "staff-pin-confirm",
+    "staff-pin-input",
+    "staff-reset-name",
+    "staff-reset-note"
+  ];
+
   let reloading = false;
-
-  const show = () => banner.classList.remove("hidden");
+  let pendingReload = false;
   let waitingWorker = null;
+  let userRequestedUpdate = false;
 
-  const attachWaiting = (worker) => {
-    if (!worker) return;
-    waitingWorker = worker;
-    show();
-  };
+  function isUserBusy() {
+    if (BUSY_IDS.some((id) => {
+      const el = document.getElementById(id);
+      return el && !el.classList.contains("hidden");
+    })) return true;
+    return DRAFT_IDS.some((id) => {
+      const el = document.getElementById(id);
+      if (!el) return false;
+      if (el.type === "file") return el.files && el.files.length > 0;
+      return String(el.value || "").trim() !== "";
+    });
+  }
 
-  banner.addEventListener("click", () => {
-    if (waitingWorker) {
-      waitingWorker.postMessage({ type: "SKIP_WAITING" });
+  function readGuard() {
+    try {
+      const g = JSON.parse(sessionStorage.getItem(RELOAD_GUARD_KEY) || "null");
+      return g && typeof g === "object" && "version" in g && Number.isFinite(Number(g.at)) ? g : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeGuard(version, at) {
+    try {
+      sessionStorage.setItem(RELOAD_GUARD_KEY, JSON.stringify({ version: String(version), at }));
+    } catch {
+      /* ignore quota */
+    }
+  }
+
+  function showBanner() {
+    banner.classList.remove("hidden");
+  }
+
+  function activateWaiting() {
+    if (!waitingWorker) return;
+    try { waitingWorker.postMessage({ type: "SKIP_WAITING" }); } catch {
+      /* ignore */
+    }
+  }
+
+  function canAutoReload(now) {
+    const guard = readGuard();
+    if (guard && now - Number(guard.at) < RELOAD_GUARD_MS) return false;
+    if (guard && String(guard.version) === String(appVersion())) return false;
+    return true;
+  }
+
+  function safeReload() {
+    if (reloading) return;
+    const now = Date.now();
+    if (!canAutoReload(now)) {
+      showBanner();
       return;
     }
+    reloading = true;
+    writeGuard(appVersion(), now);
+    location.reload();
+  }
+
+  function applyUpdate() {
+    if (pendingReload) {
+      if (isUserBusy()) {
+        showBanner();
+        return;
+      }
+      safeReload();
+      return;
+    }
+    if (!waitingWorker) return;
+    if (isUserBusy()) {
+      showBanner();
+      return;
+    }
+    activateWaiting();
+  }
+
+  banner.addEventListener("click", () => {
+    userRequestedUpdate = true;
+    if (pendingReload) {
+      if (reloading) return;
+      reloading = true;
+      writeGuard(appVersion(), Date.now());
+      location.reload();
+      return;
+    }
+    activateWaiting();
+  });
+
+  document.addEventListener("click", applyUpdate);
+  document.addEventListener("input", applyUpdate);
+  document.addEventListener("change", applyUpdate);
+  const observer = new MutationObserver(applyUpdate);
+  BUSY_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) observer.observe(el, { attributes: true, attributeFilter: ["class"] });
   });
 
   if (!("serviceWorker" in navigator)) return;
 
   // Only reload when an existing worker is replaced (not on the very first install).
-  const hadController = Boolean(navigator.serviceWorker.controller);
+  // After a first install on this page, remember the controller so a later
+  // update in the same tab can still auto-reload.
+  let hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (!hadController || reloading) return;
-    reloading = true;
-    location.reload();
+    if (reloading) return;
+    if (!hadController) {
+      hadController = true;
+      return;
+    }
+    pendingReload = true;
+    if (isUserBusy() && !userRequestedUpdate) {
+      showBanner();
+      return;
+    }
+    safeReload();
   });
 
   navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((reg) => {
+    const check = () => { reg.update().catch(() => {}); };
+    check();
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) reg.update().catch(() => {});
+      if (!document.hidden) check();
     });
+    setInterval(check, UPDATE_CHECK_MS);
+
+    const attachWaiting = (worker) => {
+      if (!worker) return;
+      waitingWorker = worker;
+      applyUpdate();
+    };
     if (reg.waiting) attachWaiting(reg.waiting);
     reg.addEventListener("updatefound", () => {
       const installing = reg.installing;
