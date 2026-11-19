@@ -514,7 +514,7 @@ function fillLocationFilter() {
   }
 }
 
-function fillLocationSelect() {
+function fillLocationSelect(resetChoice = false) {
   const sel = document.getElementById("add-task-location-input");
   if (!sel) return;
   const current = sel.value;
@@ -523,6 +523,9 @@ function fillLocationSelect() {
   const first = document.createElement("option");
   first.value = "";
   first.textContent = ready ? "Kies een locatie" : "Niet beschikbaar";
+  first.disabled = true;
+  first.selected = true;
+  first.defaultSelected = true;
   sel.append(first);
   activeLocationItems().forEach((item) => {
     const option = document.createElement("option");
@@ -530,9 +533,13 @@ function fillLocationSelect() {
     option.textContent = item.label || item.id;
     sel.append(option);
   });
-  if (current && activeLocationItems().some((item) => item.id === current)) sel.value = current;
+  if (!resetChoice && current && activeLocationItems().some((item) => item.id === current)) {
+    sel.value = current;
+  } else {
+    sel.selectedIndex = 0;
+    first.selected = true;
+  }
   sel.disabled = !ready;
-  sel.required = ready;
   const form = document.getElementById("staff-add-task-form");
   const submit = form && form.querySelector("button[type=submit]");
   if (submit && form && form.dataset.busy !== "1") submit.disabled = !ready;
@@ -1023,7 +1030,7 @@ function openAddTaskPage() {
     preview.classList.add("hidden");
   }
   setFormError("add-task-error", "");
-  fillLocationSelect();
+  fillLocationSelect(true);
   if (!locationsReady()) setFormError("add-task-error", LOCATION_UNSET_MSG);
   const assignee = document.getElementById("add-task-assignee");
   if (assignee) assignee.textContent = officialStaffName();
