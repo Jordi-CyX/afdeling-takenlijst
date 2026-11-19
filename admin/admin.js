@@ -44,6 +44,23 @@ import {
   STORAGE_MIGRATED,
   safeParse
 } from "../shared.js";
+import {
+  initV2,
+  startV2Listeners,
+  renderV2,
+  fillLocationSelect,
+  activeLocations,
+  locationLabelById,
+  locationsAvailable,
+  taskLocationText,
+  completionFor,
+  addCompletionDelete,
+  addAdminCompletion,
+  exportRawBackup,
+  taskMatchesAudit,
+  sourceText,
+  v2SubView
+} from "./v2.js";
 
 let isAdmin = false;
 let tasks = [];
@@ -149,11 +166,14 @@ function safeStatus(status) {
 }
 
 const SECTION_KEY = "zeiklijst-admin-section";
-const SECTIONS = ["dashboard", "medewerkers", "medewerker", "taken", "controle", "workflow", "meldingen", "data"];
+const SECTIONS = ["dashboard", "audit", "audits", "medewerkers", "medewerker", "taken", "controle", "workflow", "meldingen", "beheer", "data"];
 const SECTION_LABELS = {
   dashboard: "Dashboard",
-  medewerkers: "Medewerkers",
-  medewerker: "Per medewerker",
+  audit: "Audit lopen",
+  audits: "Audits",
+  beheer: "Locaties & vragen",
+  medewerkers: "Overzicht Medewerkers",
+  medewerker: "Medewerker",
   taken: "Taken",
   controle: "Controle",
   workflow: "Workflow",
@@ -161,7 +181,7 @@ const SECTION_LABELS = {
   data: "Data"
 };
 let currentSection = "dashboard";
-let taskFilters = { q: "", status: "all", employee: "all", location: "all", recurring: "all" };
+let taskFilters = { q: "", status: "all", employee: "all", location: "all", recurring: "all", urgent: "all", audit: "all" };
 let reports = [];
 let reportFilter = "all";
 let dialogResolve = null;
@@ -186,6 +206,159 @@ async function safeWrite(fn) {
     showToast(writeErrorMessage(err), "error");
     return false;
   }
+}
+
+// Inklapbare blokken op de Taken-pagina; ingeklapte staat blijft bewaard (eigenaar 12:01).
+const FOLD_KEY = "zeiklijst-admin-folds";
+function readFolds() {
+  try { return JSON.parse(localStorage.getItem(FOLD_KEY) || "{}") || {}; } catch { return {}; }
+}
+function setupFolds() {
+  const saved = readFolds();
+  document.querySelectorAll("details.fold[data-fold]").forEach((el) => {
+    const key = el.dataset.fold;
+    if (saved[key] === false) el.open = false;
+    el.addEventListener("toggle", () => {
+      const now = readFolds();
+      now[key] = el.open;
+      try { localStorage.setItem(FOLD_KEY, JSON.stringify(now)); } catch { /* privé-modus */ }
+    });
+  });
+}
+function openFold(key) {
+  const el = document.querySelector(`details.fold[data-fold="${key}"]`);
+  if (el && !el.open) el.open = true;
+}
+
+// Brede schermen (eigenaar 12:03): de menuknoppen staan onder de tegels op het dashboard;
+// het menu bovenaan is daar verborgen (CSS). Op de telefoon blijft het uitklapmenu.
+function setupDashboardNav() {
+  renderDashboardNav();
+}
+function renderDashboardNav() {
+  const box = document.getElementById("dashboard-nav");
+  if (!box) return;
+  const items = [...document.querySelectorAll("#nav-menu [role=menuitem]")].filter((el) => !(el.dataset.section === "dashboard"));
+  box.replaceChildren(...items.map((orig) => {
+    const el = orig.cloneNode(true);
+    el.removeAttribute("role");
+    el.removeAttribute("aria-current");
+    el.removeAttribute("id");
+    el.querySelectorAll("[id]").forEach((c) => c.removeAttribute("id"));
+    el.classList.add("dash-nav-btn");
+    if (el.tagName === "BUTTON") {
+      el.onclick = () => (orig.dataset.section ? showSection(orig.dataset.section) : orig.click());
+      if (orig.id === "logout-btn") el.classList.add("secondary");
+    }
+    return el;
+  }));
+}
+
+// Hiërarchische terug-functie (eigenaar 12:04): elke weergave heeft een ouder.
+// Hoofdpagina's -> dashboard; medewerkerpagina -> Overzicht Medewerkers;
+// subweergaven (audit-vragen/controle, audit-details, vraag-editor, taakdetail) -> hun pagina.
+// De terugknop van de telefoon/browser doet hetzelfde via één "wacht"-item in de geschiedenis.
+const SECTION_PARENT = {
+  audit: "dashboard",
+  audits: "dashboard",
+  beheer: "dashboard",
+  medewerkers: "dashboard",
+  medewerker: "medewerkers",
+  taken: "dashboard",
+  controle: "dashboard",
+  workflow: "dashboard",
+  meldingen: "dashboard",
+  data: "dashboard"
+};
+let historyGuard = false;
+let skipNextPop = false;
+
+function overlayOpen() {
+  if (dialogResolve) return "dialog";
+  const lb = document.getElementById("image-lightbox");
+  if (lb && !lb.classList.contains("hidden")) return "lightbox";
+  if (!document.getElementById("modal").classList.contains("hidden")) return "modal";
+  return "";
+}
+
+function atRootView() {
+  return currentSection === "dashboard" && !overlayOpen();
+}
+
+function upTarget(section = currentSection) {
+  const sub = v2SubView(section);
+  if (sub) return { label: sub.label, go: sub.up };
+  const parent = SECTION_PARENT[section];
+  if (!parent) return null;
+  return { label: SECTION_LABELS[parent], go: () => showSection(parent) };
+}
+
+function goUp() {
+  const overlay = overlayOpen();
+  if (overlay === "dialog") closeDialog({ ok: false });
+  else if (overlay === "lightbox") closeLightbox();
+  else if (overlay === "modal") closeModal();
+  else {
+    const t = upTarget();
+    if (t) t.go();
+  }
+  updateBackLabels();
+}
+
+// Knop in de app: één niveau omhoog. Staan we daarna op het dashboard, dan het wacht-item opruimen.
+function goUpFromButton() {
+  goUp();
+  if (atRootView() && historyGuard) {
+    historyGuard = false;
+    skipNextPop = true;
+    history.back();
+  }
+}
+
+function ensureHistoryGuard() {
+  if (atRootView() || historyGuard) return;
+  history.pushState({ zeiklijstGuard: true }, "");
+  historyGuard = true;
+}
+
+function setupHistory() {
+  window.addEventListener("popstate", () => {
+    if (skipNextPop) { skipNextPop = false; return; }
+    historyGuard = false;
+    if (document.getElementById("admin-app").classList.contains("hidden")) return;
+    goUp();
+    ensureHistoryGuard();
+  });
+  // Na elke klik/toets: labels bijwerken en zo nodig een wacht-item zetten.
+  const after = () => setTimeout(() => { updateBackLabels(); if (!document.getElementById("admin-app").classList.contains("hidden")) ensureHistoryGuard(); }, 0);
+  document.addEventListener("click", after);
+  document.addEventListener("keyup", (e) => { if (e.key === "Enter" || e.key === " ") after(); });
+}
+
+function setupBackButtons() {
+  document.querySelectorAll(".admin-section[data-section]").forEach((sec) => {
+    const name = sec.dataset.section;
+    if (name === "dashboard") return;
+    let btn = sec.querySelector(":scope > .back-up");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "secondary back-btn back-up";
+      sec.prepend(btn);
+    }
+    btn.dataset.backFor = name;
+    btn.onclick = goUpFromButton;
+  });
+  updateBackLabels();
+}
+
+function updateBackLabels() {
+  document.querySelectorAll(".back-up[data-back-for]").forEach((btn) => {
+    const t = upTarget(btn.dataset.backFor);
+    const text = `← ${t ? t.label : "Dashboard"}`;
+    if (btn.textContent !== text) btn.textContent = text;
+    btn.setAttribute("aria-label", `Terug naar ${t ? t.label : "Dashboard"}`);
+  });
 }
 
 function showToast(message, type = "error") {
@@ -323,6 +496,8 @@ function startListeners() {
     renderReports();
     updateNavBadge();
   }, ignoreListenerError);
+  // Build v2: locaties, vragenlijst, audits, afgerond-door.
+  startV2Listeners();
 }
 
 function ignoreListenerError() {
@@ -333,7 +508,11 @@ function applyTaskMeta() {
   tasks = rawTasks.map((task) => {
     const meta = taskMeta.get(task.id);
     const dueDate = (meta && isValidDueDate(meta.dueDate)) ? meta.dueDate : (task.dueDate || "");
-    return { ...task, dueDate };
+    // Build v2: afgerond door + tijdstip uit taskCompletions (alleen admin); oude velden als terugval.
+    const done = completionFor(task.id);
+    const doneBy = done ? done.name : (task.pendingBy || "");
+    const doneAt = done ? done.at : (task.pendingAt || "");
+    return { ...task, dueDate, doneBy, doneAt };
   });
   renderAll();
   if (currentTaskId) openTask(currentTaskId);
@@ -419,7 +598,27 @@ function formatDueDate(value) {
 
 function isOverdue(task) {
   if (!task || task.status === "afgerond" || !isValidDueDate(task.dueDate)) return false;
-  return task.dueDate.trim() < localDateKey(new Date());
+  return task.dueDate.trim() < amsterdamDateKey(0);
+}
+
+// Streefdatum-tegel (eigenaar 12:03): telt taken met status open of pending (niet afgerond)
+// en een geldige streefdatum die verstreken is (vóór vandaag) of binnenkort valt
+// (vandaag t/m vandaag + DUE_SOON_DAYS). "Vandaag" = kalenderdatum in Europe/Amsterdam.
+const DUE_SOON_DAYS = 2;
+const DUE_TIMEZONE = "Europe/Amsterdam";
+function amsterdamDateKey(offsetDays = 0) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: DUE_TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const get = (t) => Number(parts.find((p) => p.type === t).value);
+  const d = new Date(Date.UTC(get("year"), get("month") - 1, get("day") + offsetDays));
+  return d.toISOString().slice(0, 10);
+}
+function isDueSoon(task) {
+  if (!task || task.status === "afgerond" || !isValidDueDate(task.dueDate)) return false;
+  const due = task.dueDate.trim();
+  return due >= amsterdamDateKey(0) && due <= amsterdamDateKey(DUE_SOON_DAYS);
+}
+function isDueAttention(task) {
+  return isOverdue(task) || isDueSoon(task);
 }
 
 function overdueTasks() {
@@ -794,7 +993,7 @@ function setupUi() {
   document.getElementById("stat-open-card").onclick = () => showSection("taken", true, { filters: { status: "open" } });
   document.getElementById("stat-pending-card").onclick = () => showSection("controle");
   const overdueCard = document.getElementById("stat-overdue-card");
-  if (overdueCard) overdueCard.onclick = () => showSection("taken", true, { filters: { status: "overdue" } });
+  if (overdueCard) overdueCard.onclick = () => showSection("taken", true, { filters: { status: "due" } });
   document.getElementById("task-search").oninput = (event) => {
     taskFilters.q = event.target.value;
     renderTasks();
@@ -815,6 +1014,30 @@ function setupUi() {
       renderCompleted();
     };
   });
+  document.querySelectorAll("#filter-urgent [data-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      taskFilters.urgent = btn.dataset.filter;
+      syncFilterUi();
+      renderTasks();
+      renderCompleted();
+    };
+  });
+  const auditClear = document.getElementById("filter-audit-clear");
+  if (auditClear) auditClear.onclick = () => {
+    taskFilters.audit = "all";
+    syncFilterUi();
+    renderTasks();
+    renderCompleted();
+  };
+  // Owner 11:44: logo -> dashboard; terugknop op de medewerkerpagina.
+  const logoBtn = document.getElementById("logo-home");
+  if (logoBtn) logoBtn.onclick = () => showSection("dashboard");
+  setupFolds();
+  setupBackButtons();
+  setupDashboardNav();
+  const logoTitle = document.getElementById("logo-home-title");
+  if (logoTitle) logoTitle.onclick = () => showSection("dashboard");
+  setupHistory();
   document.getElementById("filter-employee").onchange = (event) => {
     taskFilters.employee = event.target.value;
     renderTasks();
@@ -865,12 +1088,26 @@ function setupUi() {
     if (event.target.id === "modal") closeModal();
   };
   document.getElementById("reassign-btn").onclick = reassignCurrentTask;
+  const relocateBtn = document.getElementById("relocate-btn");
+  if (relocateBtn) relocateBtn.onclick = relocateCurrentTask;
   document.getElementById("add-employee-form").onsubmit = addEmployee;
   document.getElementById("seed-employees-btn").onclick = () => seedEmployees();
   const bulkBtn = document.getElementById("bulk-startcodes-btn");
   if (bulkBtn) bulkBtn.onclick = () => issueStartCodesForAllActive();
   buildWeekdayPicker();
   setupEmployeeDashboard();
+  initV2({
+    dom,
+    showToast,
+    showDialog,
+    confirmAction,
+    safeWrite,
+    showSection,
+    renderAll,
+    applyTaskMeta,
+    getTasks: () => tasks,
+    getRawTasks: () => rawTasks
+  });
   document.getElementById("recurrence-start").value = localDateKey(new Date());
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkDateChange();
@@ -1020,7 +1257,13 @@ async function submitTaskForm(event) {
   event.preventDefault();
   const title = document.getElementById("title").value.trim();
   const description = document.getElementById("description").value.trim();
-  const location = document.getElementById("location").value.trim();
+  // Build v2: locatie alleen uit de vaste lijst; spoed alleen door de admin.
+  const locationId = document.getElementById("location-select").value || "";
+  const urgent = document.getElementById("is-urgent").checked;
+  const editingItem = editingTaskId ? tasks.find((t) => t.id === editingTaskId) : (editingTemplateId ? templates.find((t) => t.id === editingTemplateId) : null);
+  const legacyText = editingItem && !editingItem.locationId ? (editingItem.location || "") : "";
+  const location = locationId ? locationLabelById(locationId) : legacyText;
+  const locFields = locationId ? { location, locationId } : { location, locationId: deleteField() };
   if (!title) {
     showToast("Vul een titel in.");
     document.getElementById("title").focus();
@@ -1043,15 +1286,15 @@ async function submitTaskForm(event) {
       const payload = {
         title,
         description,
-        location,
         ...assignee,
-        photos: nextPhotos
+        photos: nextPhotos,
+        urgent
       };
-      assertDocSize({ ...serializeTask({ ...task, ...payload }), ...payload });
+      assertDocSize({ ...serializeTask({ ...task, ...payload, location, locationId }), ...payload });
       const dueDate = readDueDateInput();
       const ok = await safeWrite(async () => {
         const batch = writeBatch(db);
-        batch.update(doc(db, "tasks", editingTaskId), { ...payload, dueDate: deleteField() });
+        batch.update(doc(db, "tasks", editingTaskId), { ...payload, ...locFields, dueDate: deleteField() });
         if (dueDate) batch.set(doc(db, "taskMeta", editingTaskId), { dueDate });
         else batch.delete(doc(db, "taskMeta", editingTaskId));
         await batch.commit();
@@ -1070,11 +1313,14 @@ async function submitTaskForm(event) {
         title,
         description,
         location,
+        locationId,
+        urgent,
         ...assignee,
         photos: photos.length ? photos : template.photos,
         recurrence
       });
       assertDocSize(payload);
+      if (!locationId) payload.locationId = deleteField();
       const ok = await safeWrite(() => updateDoc(doc(db, "recurring", editingTemplateId), payload));
       if (ok) resetTaskForm();
       return;
@@ -1087,6 +1333,8 @@ async function submitTaskForm(event) {
         title,
         description,
         location,
+        locationId,
+        urgent,
         ...assignee,
         photos,
         recurrence,
@@ -1103,6 +1351,8 @@ async function submitTaskForm(event) {
       title,
       description,
       location,
+      locationId,
+      urgent,
       ...assignee,
       photos,
       status: "open",
@@ -1130,12 +1380,21 @@ function resetTaskForm() {
   document.getElementById("add-task-form").reset();
   document.getElementById("recurrence-start").value = localDateKey(new Date());
   setSelectedWeekdays([]);
+  fillLocationSelect(document.getElementById("location-select"), "");
+  setLegacyLocationNote("");
   document.getElementById("task-form-heading").textContent = "Nieuwe taak";
   document.getElementById("task-submit-btn").textContent = "Taak toevoegen";
   document.getElementById("task-cancel-edit").classList.add("hidden");
   document.getElementById("is-recurring").disabled = false;
   document.getElementById("photo-note").classList.add("hidden");
   updateRecurrenceVisibility();
+}
+
+function setLegacyLocationNote(text) {
+  const note = document.getElementById("location-legacy");
+  if (!note) return;
+  note.textContent = text ? `Oude locatie: “${text}”. Die blijft staan tot je hierboven een vaste locatie kiest.` : "";
+  note.classList.toggle("hidden", !text);
 }
 
 function openTaskForm() {
@@ -1150,7 +1409,9 @@ function startEditTask(id) {
   closeModal();
   showSection("taken");
   document.getElementById("title").value = task.title || "";
-  document.getElementById("location").value = task.location || "";
+  fillLocationSelect(document.getElementById("location-select"), task.locationId || "");
+  setLegacyLocationNote(task.locationId ? "" : (task.location || ""));
+  document.getElementById("is-urgent").checked = Boolean(task.urgent);
   document.getElementById("description").value = task.description || "";
   document.getElementById("assignee-select").value = task.assigneeId || "";
   document.getElementById("due-date").value = isValidDueDate(task.dueDate) ? task.dueDate : "";
@@ -1176,7 +1437,9 @@ function startEditTemplate(id) {
   if (!template) return;
   editingTemplateId = id;
   document.getElementById("title").value = template.title || "";
-  document.getElementById("location").value = template.location || "";
+  fillLocationSelect(document.getElementById("location-select"), template.locationId || "");
+  setLegacyLocationNote(template.locationId ? "" : (template.location || ""));
+  document.getElementById("is-urgent").checked = Boolean(template.urgent);
   document.getElementById("description").value = template.description || "";
   document.getElementById("assignee-select").value = template.assigneeId || "";
   document.getElementById("is-recurring").checked = true;
@@ -1274,11 +1537,14 @@ function showSection(name, persist = true, options = {}) {
   });
   document.getElementById("nav-current").textContent = SECTION_LABELS[section];
   document.querySelectorAll("#nav-menu [data-section]").forEach((btn) => {
-    if (btn.dataset.section === section) btn.setAttribute("aria-current", "page");
+    if (btn.dataset.section === section || (section === "medewerker" && btn.dataset.section === "medewerkers")) btn.setAttribute("aria-current", "page");
     else btn.removeAttribute("aria-current");
   });
   closeNav();
-  if (section === "taken" && options.filters) renderTasks();
+  if (section === "taken" && options.filters) {
+    openFold("takenlijst");
+    renderTasks();
+  }
   if (section === "medewerker") {
     if (options.employeeId) selectEmployeeDashboard(options.employeeId);
     else renderEmployeeDashboard();
@@ -1329,6 +1595,8 @@ function updateNavBadge() {
 
 function renderAll() {
   fillAssigneeSelects();
+  const locSel = document.getElementById("location-select");
+  if (locSel && document.activeElement !== locSel) fillLocationSelect(locSel, locSel.value);
   fillTaskFilters();
   renderDashboard();
   renderTasks();
@@ -1341,7 +1609,10 @@ function renderAll() {
   renderPinResets();
   renderStaffCreated();
   renderReports();
+  renderV2();
   updateNavBadge();
+  renderDashboardNav();
+  updateBackLabels();
 }
 
 function currentWorkloadGroups() {
@@ -1385,8 +1656,11 @@ function renderDashboard() {
   document.getElementById("stat-pending").textContent = tasks.filter((t) => t.status === "pending").length;
   document.getElementById("stat-done").textContent = tasks.filter((t) => t.status === "afgerond").length;
   const overdue = overdueTasks();
+  const soon = tasks.filter(isDueSoon);
   const overdueStat = document.getElementById("stat-overdue");
-  if (overdueStat) overdueStat.textContent = String(overdue.length);
+  if (overdueStat) overdueStat.textContent = String(overdue.length + soon.length);
+  const dueSub = document.getElementById("stat-due-sub");
+  if (dueSub) dueSub.textContent = `${overdue.length} verstreken · ${soon.length} binnenkort`;
   const overdueBox = document.getElementById("dashboard-overdue");
   if (overdueBox) {
     if (!overdue.length) {
@@ -1398,24 +1672,10 @@ function renderDashboard() {
       bindTaskItems(overdueBox);
     }
   }
-  const workload = document.getElementById("dashboard-workload");
-  const rows = currentWorkloadGroups();
-  if (!rows.length) {
-    workload.innerHTML = '<p class="empty-state">Nog geen taken om te verdelen.</p>';
-  } else {
-    workload.replaceChildren(...rows.map((g) => dom`
-      <button type="button" class="workload-row" data-workload="${g.key}">
-        <span>${g.label}</span>
-        <span class="counts">${g.open} open · ${g.pending} pending</span>
-      </button>`));
-    workload.querySelectorAll("[data-workload]").forEach((btn) => {
-      btn.onclick = () => showSection("taken", true, { filters: { status: "all", employee: btn.dataset.workload } });
-    });
-  }
   const pendingBox = document.getElementById("dashboard-pending");
   const latest = tasks
     .filter((task) => task.status === "pending")
-    .sort((a, b) => String(b.pendingAt || b.createdAt || "").localeCompare(String(a.pendingAt || a.createdAt || "")))
+    .sort((a, b) => String(b.doneAt || b.createdAt || "").localeCompare(String(a.doneAt || a.createdAt || "")))
     .slice(0, 5);
   if (!latest.length) {
     pendingBox.innerHTML = '<p class="empty-state">Geen pending taken.</p>';
@@ -1610,7 +1870,7 @@ function renderWorkflow() {
     for (const at of rejectionTimes(task)) {
       if (inPeriod(at, start)) group.rejected += 1;
     }
-    const ticker = (task.pendingBy || "").trim();
+    const ticker = (task.doneBy || "").trim();
     if (ticker) {
       const entry = ensureTicker(ticker);
       if (task.status === "pending") entry.pending += 1;
@@ -1673,7 +1933,7 @@ function renderControle() {
   if (!list) return;
   const pending = tasks
     .filter((task) => task.status === "pending")
-    .sort((a, b) => String(b.pendingAt || b.createdAt || "").localeCompare(String(a.pendingAt || a.createdAt || "")));
+    .sort((a, b) => String(b.doneAt || b.createdAt || "").localeCompare(String(a.doneAt || a.createdAt || "")));
   if (!pending.length) {
     list.innerHTML = '<p class="empty-state">Geen pending taken. Alles is bij.</p>';
     return;
@@ -1706,9 +1966,10 @@ function isRecurring(task) {
 }
 
 function locationLabel(item) {
-  const location = (item && item.location || "").trim();
+  const location = item ? taskLocationText(item) : "";
   if (!location) return "";
-  return dom`<div class="task-location">${location}</div>`;
+  const unlinked = !item.locationId;
+  return dom`<div class="task-location">${location}${unlinked ? dom` <span class="loc-unlinked">(niet gekoppeld)</span>` : ""}</div>`;
 }
 
 function assigneeBanner(task) {
@@ -1724,15 +1985,17 @@ function taskItem(task) {
   const status = safeStatus(task.status);
   const label = status === "open" ? "Open" : status === "pending" ? "Pending" : "Afgerond";
   return dom`
-    <div class="task-item ${status}" role="button" tabindex="0" data-task-id="${task.id}">
+    <div class="task-item ${status}${task.urgent ? " is-urgent" : ""}" role="button" tabindex="0" data-task-id="${task.id}">
       <div class="task-item-main">
         <div>
           <div class="task-title">${task.title}</div>
           ${locationLabel(task)}
           ${dueDateLabel(task)}
+          ${task.source ? dom`<div class="task-source">${sourceText(task)}</div>` : ""}
           ${isStaffCreatedTask(task) ? dom`<div class="task-created-by">Door ${staffCreatorLabel(task)} aangemaakt</div>` : ""}
+          ${task.status !== "open" && task.doneBy ? dom`<div class="task-done-by">Afgevinkt door ${task.doneBy}${task.doneAt ? `, ${formatDateTime(task.doneAt)}` : ""}</div>` : ""}
         </div>
-        <div class="badge-row">${isRecurring(task) ? dom`<span class="badge recurring">Herhalend</span>` : ""}<span class="badge ${status}">${label}</span>${isOverdue(task) ? dom`<span class="badge overdue">Verstreken</span>` : ""}</div>
+        <div class="badge-row">${task.urgent ? dom`<span class="badge urgent">Spoed</span>` : ""}${isRecurring(task) ? dom`<span class="badge recurring">Herhalend</span>` : ""}<span class="badge ${status}">${label}</span>${isOverdue(task) ? dom`<span class="badge overdue">Verstreken</span>` : ""}</div>
       </div>
       ${assigneeBanner(task)}
     </div>`;
@@ -1757,6 +2020,8 @@ function taskMatchesFilters(task, includeCompleted = false) {
   const status = taskFilters.status || "all";
   if (!includeCompleted && status === "overdue") {
     if (!isOverdue(task)) return false;
+  } else if (!includeCompleted && status === "due") {
+    if (!isDueAttention(task)) return false;
   } else if (!includeCompleted && status !== "all" && task.status !== status) return false;
   const q = (taskFilters.q || "").trim().toLowerCase();
   if (q) {
@@ -1776,11 +2041,13 @@ function taskMatchesFilters(task, includeCompleted = false) {
   }
   const location = taskFilters.location || "all";
   if (location !== "all") {
-    const loc = (task.location || "").trim();
-    if (location === "__none__") {
-      if (loc) return false;
-    } else if (loc !== location) return false;
+    // Build v2: filter op vaste locatie; "Overig" = niet gekoppeld (oude vrije tekst of geen locatie).
+    if (location === "__unlinked__") {
+      if (task.locationId) return false;
+    } else if (task.locationId !== location) return false;
   }
+  if ((taskFilters.urgent || "all") === "yes" && !task.urgent) return false;
+  if (!taskMatchesAudit(task, taskFilters.audit || "all")) return false;
   const recurring = taskFilters.recurring || "all";
   if (recurring === "yes" && !isRecurring(task)) return false;
   if (recurring === "no" && isRecurring(task)) return false;
@@ -1802,12 +2069,13 @@ function fillTaskFilters() {
   taskFilters.employee = empSelect.value;
 
   const locSelect = document.getElementById("filter-location");
-  const locations = [...new Set(tasks.map((task) => (task.location || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "nl"));
   const prevLoc = taskFilters.location || "all";
+  const usedInactive = [...new Set(tasks.map((t) => t.locationId).filter((id) => id && !activeLocations().some((l) => l.id === id)))];
   setOptions(locSelect, [
     ["all", "Alle locaties"],
-    ["__none__", "Geen locatie"],
-    ...locations.map((loc) => [loc, loc])
+    ...activeLocations().map((loc) => [loc.id, loc.label]),
+    ...usedInactive.map((id) => [id, `${locationLabelById(id) || id} (inactief)`]),
+    ["__unlinked__", "Overig (niet gekoppeld)"]
   ]);
   if ([...locSelect.options].some((o) => o.value === prevLoc)) locSelect.value = prevLoc;
   else locSelect.value = "all";
@@ -1824,6 +2092,15 @@ function syncFilterUi() {
   document.querySelectorAll("#filter-recurring [data-filter]").forEach((btn) => {
     btn.setAttribute("aria-pressed", btn.dataset.filter === (taskFilters.recurring || "all") ? "true" : "false");
   });
+  document.querySelectorAll("#filter-urgent [data-filter]").forEach((btn) => {
+    btn.setAttribute("aria-pressed", btn.dataset.filter === (taskFilters.urgent || "all") ? "true" : "false");
+  });
+  const auditNote = document.getElementById("filter-audit-note");
+  if (auditNote) {
+    const a = taskFilters.audit || "all";
+    auditNote.classList.toggle("hidden", a === "all");
+    document.getElementById("filter-audit-text").textContent = a === "any" ? "Alleen audit-taken" : "Alleen taken uit één audit";
+  }
   const empSelect = document.getElementById("filter-employee");
   if (empSelect && [...empSelect.options].some((o) => o.value === taskFilters.employee)) empSelect.value = taskFilters.employee;
   const locSelect = document.getElementById("filter-location");
@@ -1832,9 +2109,10 @@ function syncFilterUi() {
 
 function renderTasks() {
   const list = document.getElementById("task-list");
+  // Build v2: spoed altijd bovenaan.
   const active = tasks
     .filter((task) => taskMatchesFilters(task, false))
-    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    .sort((a, b) => (Number(b.urgent) - Number(a.urgent)) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   if (!active.length) {
     list.innerHTML = '<p class="empty-state">Geen taken die aan de filters voldoen.</p>';
     return;
@@ -1875,6 +2153,7 @@ function renderTemplates() {
           </div>
         </div>
         <div class="badge-row">
+          ${template.urgent ? dom`<span class="badge urgent">Spoed</span>` : ""}
           ${template.paused ? dom`<span class="badge paused">Gepauzeerd</span>` : dom`<span class="badge recurring">Actief</span>`}
         </div>
       </div>
@@ -1930,7 +2209,7 @@ function employeeItem(emp) {
         ${emp.active ? dom`<button type="button" data-act="code" title="Startcode (7 dagen geldig, eenmalig)">${hasPin ? "Pincode resetten (startcode)" : "Startcode maken"}</button>` : ""}
         ${open ? dom`<button type="button" class="secondary" data-act="show-code">Code tonen</button>` : ""}
         ${open ? dom`<button type="button" class="secondary" data-act="delete-code">Code verwijderen</button>` : ""}
-        <button type="button" class="secondary" data-act="dash">Openen</button>
+        <button type="button" class="secondary" data-act="dash">Openen (startcode, pincode, gegevens)</button>
         <button type="button" class="secondary" data-act="rename">Hernoemen</button>
         <button type="button" class="secondary" data-act="toggle">${emp.active ? "Deactiveren" : "Activeren"}</button>
         <button type="button" class="danger" data-act="delete">Verwijderen</button>
@@ -1944,6 +2223,21 @@ function employeeItem(emp) {
   on("show-code", () => open && showStartCode({ name: emp.name, code: open.id, expiresAt: open.expiresAt }));
   on("delete-code", () => open && deleteStartCode(open.id));
   on("dash", () => showSection("medewerker", true, { employeeId: emp.id }));
+  // Owner 11:44: klik op een medewerker in het overzicht opent diens pagina.
+  const top = frag.querySelector(".employee-top");
+  if (top) {
+    top.setAttribute("role", "button");
+    top.tabIndex = 0;
+    top.setAttribute("aria-label", `${emp.name}: pagina openen`);
+    const openPage = () => showSection("medewerker", true, { employeeId: emp.id });
+    top.addEventListener("click", openPage);
+    top.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openPage();
+      }
+    });
+  }
   on("rename", () => renameEmployee(emp.id));
   on("toggle", () => toggleEmployee(emp.id));
   on("delete", () => removeEmployee(emp.id));
@@ -2090,12 +2384,15 @@ function openTask(id) {
   currentTaskId = id;
   document.getElementById("modal-title").textContent = task.title;
   const locationEl = document.getElementById("modal-location");
-  const location = (task.location || "").trim();
-  locationEl.textContent = location;
+  const location = taskLocationText(task);
+  locationEl.textContent = location ? `${location}${task.locationId ? "" : " (niet gekoppeld)"}` : "";
   locationEl.classList.toggle("hidden", !location);
+  const relocate = document.getElementById("relocate-select");
+  if (relocate) fillLocationSelect(relocate, task.locationId || "", { noneLabel: task.location && !task.locationId ? `Niet gekoppeld (${task.location})` : "Geen locatie" });
   document.getElementById("modal-assignee").textContent = "Toegewezen aan: " + assigneeLabel(task);
   const status = safeStatus(task.status);
   const statusBadges = [dom`<span class="badge ${status}">${status === "open" ? "Open" : status === "pending" ? "Pending" : "Afgerond"}</span>`];
+  if (task.urgent) statusBadges.unshift(dom`<span class="badge urgent">Spoed</span>`);
   if (isRecurring(task)) statusBadges.push(dom`<span class="badge recurring">Herhalend</span>`);
   if (isOverdue(task)) statusBadges.push(dom`<span class="badge overdue">Verstreken</span>`);
   if (task.rejectedCount || task.lastRejectedAt || (Array.isArray(task.rejections) && task.rejections.length)) {
@@ -2107,12 +2404,14 @@ function openTask(id) {
     extra.push(`Streefdatum ${formatDueDate(task.dueDate)}${isOverdue(task) ? " (verstreken)" : ""}`);
   }
   if (task.createdAt) extra.push(`Aangemaakt op ${formatDateTime(task.createdAt)}`);
+  if (task.source) extra.push(`Herkomst: ${sourceText(task)}`);
   if (isStaffCreatedTask(task)) {
     extra.push(`Door ${staffCreatorLabel(task)} aangemaakt`);
     if (task.adminReview) extra.push(`Admin-review: ${task.adminReview}`);
   }
-  if (task.pendingAt) {
-    extra.push(`Afgevinkt op ${formatDateTime(task.pendingAt)}${task.pendingBy ? " door " + task.pendingBy : ""}`);
+  // Build v2: afgerond door + tijdstip (alleen zichtbaar voor de admin).
+  if (task.doneBy || task.doneAt) {
+    extra.push(`Afgevinkt${task.doneBy ? " door " + task.doneBy : ""}${task.doneAt ? " op " + formatDateTime(task.doneAt) : ""}`);
   }
   if (task.completedAt) extra.push(`Goedgekeurd op ${formatDateTime(task.completedAt)}`);
   document.getElementById("modal-description").replaceChildren(dom`
@@ -2139,6 +2438,11 @@ function openTask(id) {
   if (task.status === "open") {
     actions.innerHTML += `<button type="button" class="success" data-action="pending">Markeer als gedaan</button>`;
   }
+  if (task.status !== "afgerond") {
+    actions.innerHTML += task.urgent
+      ? `<button type="button" class="secondary" data-action="urgent">Spoed uitzetten</button>`
+      : `<button type="button" class="urgent-btn" data-action="urgent">Spoed</button>`;
+  }
   if (task.status === "pending") {
     actions.innerHTML += `<button type="button" class="success" data-action="approve">Goedkeuren</button>`;
     actions.innerHTML += `<button type="button" class="secondary" data-action="reject">Afwijzen</button>`;
@@ -2163,6 +2467,8 @@ function openTask(id) {
   if (rejectBtn) rejectBtn.onclick = () => rejectTask(task.id);
   if (reopenBtn) reopenBtn.onclick = () => reopenTask(task.id);
   if (deleteBtn) deleteBtn.onclick = () => deleteTask(task.id);
+  const urgentBtn = actions.querySelector('[data-action="urgent"]');
+  if (urgentBtn) urgentBtn.onclick = () => safeWrite(() => updateDoc(doc(db, "tasks", task.id), { urgent: !task.urgent }));
   document.getElementById("modal").classList.remove("hidden");
 }
 
@@ -2198,12 +2504,13 @@ function closeModal() {
 async function markPending(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || task.status !== "open") return;
-  await safeWrite(() => updateDoc(doc(db, "tasks", id), {
-    status: "pending",
-    pendingAt: new Date().toISOString(),
-    pendingBy: null,
-    pendingByEmployeeId: null
-  }));
+  // Build v2: geen naam/tijd op de taak; de admin staat als "Beheerder" in taskCompletions.
+  await safeWrite(async () => {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "tasks", id), { status: "pending", pendingAt: deleteField(), pendingBy: deleteField(), pendingByEmployeeId: deleteField() });
+    addAdminCompletion(batch, id);
+    await batch.commit();
+  });
 }
 
 async function approveTask(id) {
@@ -2234,16 +2541,22 @@ async function rejectTask(id) {
   const reason = (result.value || "").trim();
   const at = new Date().toISOString();
   const by = "Beheerder"; // V8: geen admin-e-mailadres in taakdata die medewerkers lezen
-  const ok = await safeWrite(() => updateDoc(doc(db, "tasks", id), {
-    status: "open",
-    pendingAt: null,
-    pendingBy: null,
-    pendingByEmployeeId: null,
-    rejectedCount: increment(1),
-    lastRejectedAt: at,
-    lastRejectionReason: reason,
-    rejections: arrayUnion({ at, by, reason })
-  }));
+  // Build v2: afwijzen wist ook het afgerond-door-doc (zelfde batch).
+  const ok = await safeWrite(async () => {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "tasks", id), {
+      status: "open",
+      pendingAt: deleteField(),
+      pendingBy: deleteField(),
+      pendingByEmployeeId: deleteField(),
+      rejectedCount: increment(1),
+      lastRejectedAt: at,
+      lastRejectionReason: reason,
+      rejections: arrayUnion({ at, by, reason })
+    });
+    addCompletionDelete(batch, id);
+    await batch.commit();
+  });
   if (ok) closeModal();
 }
 
@@ -2252,13 +2565,18 @@ async function reopenTask(id) {
   if (!task || task.status !== "afgerond") return;
   const confirmed = await confirmAction(`Taak “${task.title}” terugzetten naar open?`, { title: "Terugzetten", confirmText: "Terugzetten naar open" });
   if (!confirmed) return;
-  const ok = await safeWrite(() => updateDoc(doc(db, "tasks", id), {
-    status: "open",
-    completedAt: null,
-    pendingAt: null,
-    pendingBy: null,
-    pendingByEmployeeId: null
-  }));
+  const ok = await safeWrite(async () => {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "tasks", id), {
+      status: "open",
+      completedAt: null,
+      pendingAt: deleteField(),
+      pendingBy: deleteField(),
+      pendingByEmployeeId: deleteField()
+    });
+    addCompletionDelete(batch, id);
+    await batch.commit();
+  });
   if (ok) closeModal();
 }
 
@@ -2270,9 +2588,22 @@ async function deleteTask(id) {
     const batch = writeBatch(db);
     batch.delete(doc(db, "tasks", id));
     batch.delete(doc(db, "taskMeta", id));
+    addCompletionDelete(batch, id);
     await batch.commit();
   });
   if (ok) closeModal();
+}
+
+// Build v2: oude taak (of taak) aan een vaste locatie koppelen; de oude vrije tekst blijft staan.
+async function relocateCurrentTask() {
+  if (!currentTaskId) return;
+  const task = tasks.find((item) => item.id === currentTaskId);
+  if (!task) return;
+  const id = document.getElementById("relocate-select").value || "";
+  const update = id
+    ? { locationId: id, ...(task.locationId || !task.location ? { location: locationLabelById(id) } : {}) }
+    : { locationId: deleteField() };
+  if (await safeWrite(() => updateDoc(doc(db, "tasks", currentTaskId), update))) showToast("Locatie opgeslagen.", "ok");
 }
 
 async function reassignCurrentTask() {
@@ -2305,7 +2636,7 @@ async function cleanupOldCompleted() {
     cancelText: "Annuleren"
   });
   if (!first.ok) return;
-  exportData();
+  if (!(await exportRawBackup())) return;
   const confirmed = await confirmAction(
     `${old.length} afgeronde taken ouder dan 90 dagen definitief verwijderen? Dit kan niet ongedaan worden gemaakt.`,
     { title: "Definitief opschonen", confirmText: "Opschonen", danger: true }
@@ -2317,7 +2648,8 @@ async function cleanupOldCompleted() {
     for (const task of old) {
       batch.delete(doc(db, "tasks", task.id));
       batch.delete(doc(db, "taskMeta", task.id));
-      count += 2;
+      addCompletionDelete(batch, task.id);
+      count += 3;
       if (count >= 400) {
         await batch.commit();
         batch = writeBatch(db);
