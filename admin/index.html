@@ -413,31 +413,12 @@
 
     <section id="section-data" class="admin-section hidden" data-section="data">
       <h2>Data</h2>
-      <div id="migration-banner" class="migration-banner hidden">
-        <p>Er staan nog lokale taken of herhalingen op dit apparaat. Importeer ze naar de gedeelde lijst zodat het hele team ze ziet.</p>
-        <div class="form-actions">
-          <button type="button" id="migrate-btn">Importeer lokale gegevens naar Firebase</button>
-          <button type="button" id="migrate-dismiss" class="secondary">Niet nu</button>
-        </div>
-      </div>
       <div id="maintenance-card" class="emp-dash-card maintenance-card"></div>
       <div id="data-v2"></div>
-      <h3>Export / import (oud formaat)</h3>
-      <p class="section-intro">Exporteer of importeer een back-up van taken, herhalingen en medewerkers. De export bevat ook de extra gegevens per medewerker (die worden niet geïmporteerd).</p>
-      <div class="form-actions">
-        <button type="button" id="export-btn">Exporteer</button>
-        <input type="file" id="import-file" accept="application/json,.json" hidden>
-        <button type="button" id="import-btn" class="secondary">Importeer</button>
-      </div>
       <h3>Opschonen</h3>
-      <p class="section-intro">Verwijder afgeronde taken ouder dan 90 dagen. Exporteer eerst een back-up.</p>
+      <p class="section-intro">Verwijder afgeronde taken ouder dan 90 dagen. Maak eerst een volledige back-up (hierboven).</p>
       <div class="form-actions">
         <button type="button" id="cleanup-btn" class="secondary">Opschonen</button>
-      </div>
-      <h3>Oude naamindex</h3>
-      <p class="section-intro">De medewerkers-app gebruikt de naamindex niet meer (inloggen gaat met een startcode). Je kunt de oude documenten verwijderen.</p>
-      <div class="form-actions">
-        <button type="button" id="purge-name-index-btn" class="secondary">Naamindex verwijderen</button>
       </div>
     </section>
   </main>

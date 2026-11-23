@@ -15,8 +15,7 @@ import {
   writeBatch,
   deleteDoc,
   Timestamp,
-  serverTimestamp,
-  deleteField
+  serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { db, localDateKey, amsterdamDateKey, formatDate, formatDateTime } from "../shared.js";
 import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js?v=30";
@@ -324,97 +323,10 @@ export function addAdminCompletion(batch, taskId) {
   batch.set(doc(db, "taskCompletions", taskId), { employeeId: "", name: "Beheerder", at: serverTimestamp() });
 }
 
-function legacyPendingTasks() {
-  return ctx.getRawTasks().filter((t) => t.pendingBy || t.pendingAt || t.pendingByEmployeeId);
-}
-
-// Eenmalig: oude pendingBy/pendingAt/pendingByEmployeeId van taken naar taskCompletions (met back-up eerst).
-export async function migratePendingBy() {
-  const list = legacyPendingTasks();
-  if (!list.length) {
-    ctx.showToast("Er staan geen oude afvinkers meer op taken.", "ok");
-    return;
-  }
-  const first = await ctx.showDialog({
-    title: "Afvinkers verplaatsen",
-    message: `${list.length} taken hebben nog een naam of tijd van afvinken op de taak zelf (zichtbaar voor medewerkers). Eerst wordt een volledige back-up gedownload; daarna verplaats je die gegevens naar de lijst die alleen de admin ziet.`,
-    confirmText: "Back-up downloaden",
-    cancelText: "Annuleren"
-  });
-  if (!first.ok) return;
-  if (!(await exportRawBackup())) return;
-  const ok = await ctx.confirmAction(`Back-up gedownload? Dan nu ${list.length} afvinkers verplaatsen.`, { title: "Verplaatsen", confirmText: "Verplaatsen" });
-  if (!ok) return;
-  const done = await ctx.safeWrite(async () => {
-    let batch = writeBatch(db);
-    let n = 0;
-    for (const t of list) {
-      if (!completions.has(t.id)) {
-        const at = t.pendingAt ? new Date(t.pendingAt) : null;
-        batch.set(doc(db, "taskCompletions", t.id), {
-          employeeId: t.pendingByEmployeeId || "",
-          name: t.pendingBy || "",
-          at: at && !Number.isNaN(at.getTime()) ? Timestamp.fromDate(at) : null,
-          legacy: true
-        });
-        n += 1;
-      }
-      batch.update(doc(db, "tasks", t.id), { pendingAt: deleteField(), pendingBy: deleteField(), pendingByEmployeeId: deleteField() });
-      n += 1;
-      if (n >= AUDIT_SETTINGS.batchSize - 1) {
-        await batch.commit();
-        batch = writeBatch(db);
-        n = 0;
-      }
-    }
-    if (n) await batch.commit();
-  });
-  if (done) ctx.showToast(`${list.length} afvinkers verplaatst.`, "ok");
-}
-
-// Noodknop (terugval, review I1): ALLE afvinkers (verplaatst én nieuw via v20 afgevinkt) weer op de
-// taak zetten, zodat de oude app (v25) na terugdraaien ziet wie wat heeft afgevinkt.
-// Alleen voor taken die nog bestaan en niet 'open' zijn; taskCompletions-documenten worden daarna verwijderd.
-export function restorableCompletions() {
-  const tasksById = new Map(ctx.getRawTasks().map((t) => [t.id, t]));
-  return [...completions.entries()].filter(([id]) => {
-    const t = tasksById.get(id);
-    return t && t.status !== "open";
-  });
-}
-
-export async function restorePendingBy() {
-  const list = restorableCompletions();
-  if (!list.length) {
-    ctx.showToast("Geen afvinkers gevonden om terug te zetten.", "ok");
-    return;
-  }
-  const legacyCount = list.filter(([, c]) => c.legacy).length;
-  const ok = await ctx.confirmAction(`Noodknop: ${list.length} afvinkers terugzetten op de taken (${legacyCount} verplaatst, ${list.length - legacyCount} nieuw)? Alleen gebruiken als je teruggaat naar de oude app en regels. Eerst wordt een ruwe back-up gedownload.`, { title: "Terugzetten", confirmText: "Back-up en terugzetten", danger: true });
-  if (!ok) return;
-  if (!(await exportRawBackup())) return;
-  const done = await ctx.safeWrite(async () => {
-    let batch = writeBatch(db);
-    let n = 0;
-    for (const [id, c] of list) {
-      batch.update(doc(db, "tasks", id), { pendingBy: c.name || null, pendingByEmployeeId: c.employeeId || null, pendingAt: c.at || null });
-      batch.delete(doc(db, "taskCompletions", id));
-      n += 2;
-      if (n >= AUDIT_SETTINGS.batchSize) {
-        await batch.commit();
-        batch = writeBatch(db);
-        n = 0;
-      }
-    }
-    if (n) await batch.commit();
-  });
-  if (done) ctx.showToast(`${list.length} afvinkers teruggezet.`, "ok");
-}
-
 // ---------- Ruwe back-up ----------
 const BACKUP_COLLECTIONS = [
   "tasks", "taskMeta", "taskCompletions", "recurring", "employees", "employeeDetails", "staffProfiles", "reports",
-  "staffAccounts", "pinResetRequests", "staffDailyCounters", "settings", "auditConfig", "audits",
+  "staffAccounts", "pinResetRequests", "pinResetLimits", "staffDailyCounters", "settings", "auditConfig", "audits",
   "auditVariants", // V3A: audit-varianten
   "questionBank" // V3C: standaardvragen
 ];
@@ -2347,8 +2259,6 @@ function renderDashboardV2() {
   const setup = [];
   if (locationsReady && !locationsDoc) setup.push(dom`<button type="button" data-seed-locations>Locatielijst aanmaken</button>`);
   if (configReady() && !variants().length && locationsDoc) setup.push(dom`<button type="button" data-seed-config>Vragenlijst aanmaken</button>`);
-  const legacy = legacyPendingTasks().length;
-  if (legacy) setup.push(dom`<button type="button" class="secondary" data-goto-data>${legacy} oude afvinkers verplaatsen (Data)</button>`);
   const a = activeAuditDoc;
   const last = completedAudits()[0];
   const lt = last ? auditTotal(last) : null;
@@ -2371,7 +2281,6 @@ function renderDashboardV2() {
   const on = (sel, fn) => { const el = root.querySelector(sel); if (el) el.onclick = fn; };
   on("[data-seed-locations]", () => seedLocations());
   on("[data-seed-config]", () => seedAuditConfig());
-  on("[data-goto-data]", () => ctx.showSection("data"));
   on("[data-dash-urgent]", () => ctx.showSection("taken", true, { filters: { status: "open", urgent: "yes" } }));
   on("[data-dash-audit-tasks]", () => ctx.showSection("taken", true, { filters: { status: "open", audit: "any" } }));
   on("[data-dash-audit]", () => ctx.showSection(a || !last ? "audit" : "audits"));
@@ -2381,27 +2290,16 @@ function renderDataV2() {
   const root = document.getElementById("data-v2");
   if (!root) return;
   const { dom } = ctx;
-  const legacy = legacyPendingTasks().length;
-  const moved = restorableCompletions().length;
   root.replaceChildren(dom`
     <h3>Volledige back-up (ruw)</h3>
-    <p class="section-intro">Download alle gegevens zoals ze in de database staan: taken, streefdatums, afgerond-door, herhalingen, medewerkers, extra gegevens, meldingen, locaties, vragenlijst en audits. Bewaar dit bestand vóór elke grote wijziging. Startcodes zitten er niet in.</p>
+    <p class="section-intro">Download alle gegevens zoals ze in de database staan: taken, streefdatums, afgerond-door, herhalingen, medewerkers, extra gegevens, afdelingen, meldingen, locaties, vragenlijsten, standaardvragen, audits en de limieten van pincode-verzoeken. Bewaar dit bestand vóór elke grote wijziging. Startcodes zitten er niet in.</p>
     <div class="form-actions"><button type="button" data-raw-backup>Volledige back-up downloaden</button></div>
     <h3>Excel-export</h3>
     <p class="section-intro">Overzicht om te lezen of te delen (niet om terug te zetten): tabbladen Taken, Audits, Medewerkers (met extra gegevens), Meldingen en Terugkerende taken. Zonder pincodes, startcodes of andere inloggegevens, en zonder foto's.</p>
-    <div class="form-actions"><button type="button" class="secondary" data-excel-export>Excel-export (.xlsx)</button></div>
-    <h3>Afvinkers verplaatsen (eenmalig)</h3>
-    <p class="section-intro">Wie een taak afvinkte, stond tot nu toe op de taak zelf (zichtbaar voor medewerkers). Vanaf deze versie staat dat in een lijst die alleen de admin ziet. ${legacy ? `Nog ${legacy} taken met een oude afvinker.` : "Er staan geen oude afvinkers meer op taken."}</p>
-    <div class="form-actions">
-      <button type="button" data-migrate-pending data-disabled="${flag(!legacy)}">Back-up + afvinkers verplaatsen</button>
-      <button type="button" class="secondary" data-restore-pending data-disabled="${flag(!moved)}">Noodknop: terugzetten (${moved})</button>
-    </div>
-    <p class="section-intro">Noodknop alleen bij teruggaan naar de oude app: zet van álle afgevinkte taken (ook die na de overstap zijn afgevinkt) de naam en tijd weer op de taak, zodat de oude app ze toont.</p>`);
+    <div class="form-actions"><button type="button" class="secondary" data-excel-export>Excel-export (.xlsx)</button></div>`);
   applyFlags(root);
   root.querySelector("[data-raw-backup]").onclick = () => exportRawBackup();
   root.querySelector("[data-excel-export]").onclick = () => exportExcel();
-  root.querySelector("[data-migrate-pending]").onclick = () => migratePendingBy();
-  root.querySelector("[data-restore-pending]").onclick = () => restorePendingBy();
 }
 
 // Voor de takenlijst: hoort de taak bij een audit?

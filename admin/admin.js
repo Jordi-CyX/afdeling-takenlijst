@@ -16,7 +16,6 @@ import {
   deleteDoc,
   collection,
   writeBatch,
-  getDocs,
   listenCollection,
   generateDueInstances,
   normalizeTask,
@@ -38,11 +37,7 @@ import {
   WEEKDAYS,
   SEED_EMPLOYEES,
   employeeSlug,
-  normalizeName,
-  STORAGE_TASKS,
-  STORAGE_TEMPLATES,
-  STORAGE_MIGRATED,
-  safeParse
+  normalizeName
 } from "../shared.js";
 import {
   initV2,
@@ -974,7 +969,6 @@ function applyAuthUi() {
   document.getElementById("admin-app").classList.toggle("hidden", !isAdmin);
   document.getElementById("admin-controls").classList.toggle("hidden", !isAdmin);
   if (isAdmin) {
-    offerMigrationIfNeeded();
     startListeners();
     showSection(readStoredSection(), false);
   } else {
@@ -1092,17 +1086,7 @@ function setupUi() {
     if (event.target.id === "image-lightbox") closeLightbox();
   };
   document.getElementById("cleanup-btn").onclick = cleanupOldCompleted;
-  const purgeBtn = document.getElementById("purge-name-index-btn");
-  if (purgeBtn) purgeBtn.onclick = purgeNameIndex;
   document.getElementById("workflow-period").onchange = renderWorkflow;
-  document.getElementById("export-btn").onclick = exportData;
-  document.getElementById("import-btn").onclick = () => document.getElementById("import-file").click();
-  document.getElementById("import-file").onchange = importData;
-  document.getElementById("migrate-btn").onclick = migrateLocalToFirebase;
-  document.getElementById("migrate-dismiss").onclick = () => {
-    localStorage.setItem(STORAGE_MIGRATED, "1");
-    document.getElementById("migration-banner").classList.add("hidden");
-  };
   showAdminVersion();
   document.getElementById("add-task-form").onsubmit = submitTaskForm;
   document.getElementById("photos").onchange = updatePhotosChosen;
@@ -2874,163 +2858,6 @@ async function cleanupOldCompleted() {
     if (count) await batch.commit();
   });
   if (ok) showToast(`${old.length} oude taken verwijderd.`, "ok");
-}
-
-function loadLocalLegacy() {
-  const rawTasks = safeParse(localStorage.getItem(STORAGE_TASKS), []);
-  const rawTemplates = safeParse(localStorage.getItem(STORAGE_TEMPLATES), []);
-  const localTasks = Array.isArray(rawTasks) ? rawTasks.map((t) => normalizeTask(t.id || String(Date.now()), t)) : [];
-  const localTemplates = Array.isArray(rawTemplates) ? rawTemplates.map((t) => normalizeTemplate(t.id || `tpl-${Date.now()}`, t)) : [];
-  return { localTasks, localTemplates };
-}
-
-function offerMigrationIfNeeded() {
-  if (localStorage.getItem(STORAGE_MIGRATED) === "1") {
-    document.getElementById("migration-banner").classList.add("hidden");
-    return;
-  }
-  const { localTasks, localTemplates } = loadLocalLegacy();
-  document.getElementById("migration-banner").classList.toggle("hidden", !localTasks.length && !localTemplates.length);
-}
-
-async function migrateLocalToFirebase() {
-  const { localTasks, localTemplates } = loadLocalLegacy();
-  const ok = await safeWrite(() => writeAll(localTemplates, localTasks));
-  if (!ok) return;
-  localStorage.setItem(STORAGE_MIGRATED, "1");
-  document.getElementById("migration-banner").classList.add("hidden");
-  showToast("Lokale gegevens zijn geïmporteerd naar Firebase.", "ok");
-}
-
-async function writeAll(tpls, taskList) {
-  const chunks = [];
-  let batch = writeBatch(db);
-  let count = 0;
-  const flush = async () => {
-    if (!count) return;
-    await batch.commit();
-    batch = writeBatch(db);
-    count = 0;
-  };
-  const add = async (ref, data) => {
-    batch.set(ref, data, { merge: true });
-    count += 1;
-    if (count >= 400) await flush();
-  };
-  for (const tpl of tpls) {
-    await add(doc(db, "recurring", tpl.id), serializeTemplate(tpl));
-  }
-  for (const task of taskList) {
-    const id = task.recurringId && task.occurrenceDate
-      ? `${task.recurringId}_${task.occurrenceDate}`
-      : (task.id || doc(collection(db, "tasks")).id);
-    const payload = serializeTask(task);
-    if (task.rejectedCount || (Array.isArray(task.rejections) && task.rejections.length) || task.lastRejectedAt || task.lastRejectionReason) {
-      payload.rejectedCount = task.rejectedCount || 0;
-      payload.rejections = Array.isArray(task.rejections) ? task.rejections : [];
-      payload.lastRejectedAt = task.lastRejectedAt || null;
-      payload.lastRejectionReason = task.lastRejectionReason || "";
-    }
-    if (task.pendingByEmployeeId) payload.pendingByEmployeeId = task.pendingByEmployeeId;
-    if (task.createdByRole || task.createdByEmployeeId || task.createdByName || task.adminReview) {
-      payload.createdByRole = task.createdByRole || "";
-      payload.createdByEmployeeId = task.createdByEmployeeId || "";
-      payload.createdByName = task.createdByName || "";
-      payload.adminReview = task.adminReview || "";
-    }
-    await add(doc(db, "tasks", id), payload);
-  }
-  await flush();
-}
-
-function exportData() {
-  const payload = {
-    version: 3,
-    source: "firebase",
-    exportedAt: new Date().toISOString(),
-    tasks,
-    templates,
-    employees,
-    employeeDetails: [...employeeDetails.values()]
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "zeiklijst-live.json";
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-async function importData(event) {
-  const file = event.target.files[0];
-  event.target.value = "";
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = async () => {
-    try {
-      const data = JSON.parse(reader.result);
-      let taskList = [];
-      let tpls = [];
-      let emps = [];
-      if (Array.isArray(data)) {
-        taskList = data.map((t) => normalizeTask(t.id || String(Date.now()), t));
-      } else if (data && typeof data === "object") {
-        if (Array.isArray(data.tasks)) taskList = data.tasks.map((t) => normalizeTask(t.id || String(Date.now()), t));
-        if (Array.isArray(data.templates)) tpls = data.templates.map((t) => normalizeTemplate(t.id || `tpl-${Date.now()}`, t));
-        if (Array.isArray(data.employees)) emps = data.employees;
-      } else {
-        throw new Error("Ongeldig bestand");
-      }
-      // B13 (v3a): eerst een samenvatting tonen.
-      const go = await confirmAction(
-        `${taskList.length} ${taskList.length === 1 ? "taak" : "taken"}, ${tpls.length} ${tpls.length === 1 ? "herhaling" : "herhalingen"} en ${emps.length} ${emps.length === 1 ? "medewerker" : "medewerkers"} importeren? Bestaande items met hetzelfde id worden overschreven.`,
-        { title: "Importeren", confirmText: "Importeren" }
-      );
-      if (!go) return;
-      await writeAll(tpls, taskList);
-      if (emps.length) {
-        const batch = writeBatch(db);
-        for (const emp of emps) {
-          const id = emp.id || employeeSlug(emp.name);
-          const pinVersion = Number.isFinite(Number(emp.pinVersion)) ? Number(emp.pinVersion) : 0;
-          const record = { id, name: emp.name || "", pinVersion };
-          batch.set(doc(db, "employees", id), {
-            name: record.name,
-            active: emp.active !== false,
-            createdAt: emp.createdAt || new Date().toISOString(),
-            pinVersion
-          }, { merge: true });
-        }
-        await batch.commit();
-      }
-      showToast("Data geïmporteerd.", "ok");
-    } catch (err) {
-      showToast(err.message || "Ongeldig bestand");
-    }
-  };
-  reader.readAsText(file);
-}
-
-// H1/M1: de medewerkers-app gebruikt nameIndex niet meer. Oude documenten kunnen weg.
-async function purgeNameIndex() {
-  const confirmed = await confirmAction("Alle documenten in de oude naamindex verwijderen? De medewerkers-app gebruikt die niet meer.", { title: "Naamindex verwijderen", confirmText: "Verwijderen", danger: true });
-  if (!confirmed) return;
-  const ok = await safeWrite(async () => {
-    const snap = await getDocs(collection(db, "nameIndex"));
-    let batch = writeBatch(db);
-    let count = 0;
-    for (const d of snap.docs) {
-      batch.delete(d.ref);
-      count += 1;
-      if (count >= 400) {
-        await batch.commit();
-        batch = writeBatch(db);
-        count = 0;
-      }
-    }
-    if (count) await batch.commit();
-  });
-  if (ok) showToast("Naamindex verwijderd.", "ok");
 }
 
 onAuthStateChanged(auth, async (user) => {
