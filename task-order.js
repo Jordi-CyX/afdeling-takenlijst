@@ -43,8 +43,9 @@ export function locationOrderMap(settings) {
   return map;
 }
 
-// Punt 4: padvolgorde (items[].order), binnen pad spoed eerst, dan streefdatum
-// (leeg achteraan), dan tiebreak (bijv. aanmaakdatum). Zonder locatie/onbekend pad achteraan.
+// Punt 4 (ZL): padvolgorde (items[].order), binnen pad spoed eerst, dan tiebreak (aanmaakdatum).
+// Geen streefdatum: die staat in taskMeta en is voor medewerkers niet leesbaar (data-afspraak ZLA §5).
+// Zonder locatie/onbekend pad achteraan.
 export function sortTasks(list, settings, tiebreak = () => "") {
   const order = locationOrderMap(settings);
   const rank = (t) => (t && t.locationId && order.has(t.locationId) ? order.get(t.locationId) : Number.MAX_SAFE_INTEGER);
@@ -53,13 +54,6 @@ export function sortTasks(list, settings, tiebreak = () => "") {
     if (r) return r < 0 ? -1 : 1;
     const u = Number(b.urgent === true) - Number(a.urgent === true);
     if (u) return u;
-    const da = a.dueDate || "";
-    const dbb = b.dueDate || "";
-    if (da !== dbb) {
-      if (!da) return 1;
-      if (!dbb) return -1;
-      return da < dbb ? -1 : 1;
-    }
     return String(tiebreak(a)).localeCompare(String(tiebreak(b)));
   });
 }

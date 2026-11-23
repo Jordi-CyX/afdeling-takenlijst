@@ -129,7 +129,6 @@ function enrichTask(id, data) {
     ? { employeeId: cb.employeeId, name: String(cb.name || "").trim().slice(0, 60) }
     : null;
   task.claimedAt = d.claimedAt || null;
-  if (typeof d.dueDate === "string" && !task.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(d.dueDate.trim())) task.dueDate = d.dueDate.trim();
   return task;
 }
 
@@ -884,7 +883,7 @@ function renderTasks() {
     && matchesFilter(task, filter)
     && matchesLocationFilter(task, locFilter)
   ));
-  // v3a punt 4: padvolgorde, binnen pad spoed, dan streefdatum (leeg achteraan).
+  // v3a punt 4: padvolgorde, binnen pad spoed (streefdatum zit in taskMeta, niet leesbaar voor medewerkers).
   const openTasks = sortTasks(visible.filter((task) => task.status === "open"), locationSettings, createdStamp);
   const pendingTasks = sortTasks(visible.filter((task) => task.status === "pending"), locationSettings, pendingStamp);
 

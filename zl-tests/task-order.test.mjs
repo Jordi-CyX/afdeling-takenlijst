@@ -15,17 +15,17 @@ const settings = {
   departments: { p15: "sanitair" }
 };
 
-t("padvolgorde, spoed, streefdatum (leeg achteraan), zonder locatie achteraan", () => {
+t("padvolgorde, dan spoed, dan aanmaakdatum; streefdatum telt niet; zonder locatie achteraan", () => {
   const list = [
-    { id: "a", locationId: "p19" },
-    { id: "b", locationId: "p14", dueDate: "" },
-    { id: "c", locationId: "p14", dueDate: "2026-11-25" },
-    { id: "d", locationId: "p14", urgent: true },
-    { id: "e", locationId: "" },
-    { id: "f", locationId: "bkc" },
-    { id: "g", locationId: "p14", dueDate: "2026-11-24" }
+    { id: "a", locationId: "p19", createdAt: "1" },
+    { id: "b", locationId: "p14", createdAt: "3" },
+    { id: "c", locationId: "p14", createdAt: "2", dueDate: "2026-11-24" },
+    { id: "d", locationId: "p14", urgent: true, createdAt: "9" },
+    { id: "e", locationId: "", createdAt: "0" },
+    { id: "f", locationId: "bkc", createdAt: "5" },
+    { id: "g", locationId: "p14", createdAt: "1", dueDate: "2026-12-31" }
   ];
-  assert.deepEqual(sortTasks(list, settings).map((x) => x.id), ["d", "g", "c", "b", "f", "a", "e"]);
+  assert.deepEqual(sortTasks(list, settings, (x) => x.createdAt).map((x) => x.id), ["d", "g", "c", "b", "f", "a", "e"]);
 });
 
 t("afdeling uit map gaat voor items[].department", () => {
