@@ -1477,3 +1477,7 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .guest-app .maintenance-card h2 { margin: 0; color: var(--anthracite); font-size: 1.25rem; line-height: 1.35; }
 .guest-app .maintenance-message { margin: 0; white-space: pre-line; color: var(--text); }
 .guest-app.is-maintenance .add-task-fab { display: none; }
+
+/* v3b (ZL v22): schakelknop naar ZLA is een link, zelfde uiterlijk als de andere menu-items. */
+.guest-app a.menu-action { text-decoration: none; color: inherit; }
+.guest-app a.menu-action.hidden { display: none; }
