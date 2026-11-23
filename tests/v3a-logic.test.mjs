@@ -42,6 +42,38 @@ t("naam: verwijderde medewerker -> opgeslagen naam", L.displayName("e9", "Bram",
 // Onderhoud
 t("onderhoudstekst: max 300 en getrimd", L.cleanMaintenanceMessage("  " + "x".repeat(400)).length, 300);
 
+// Punt 7: varianten
+t("variantIdOf zonder id = standaard", L.variantIdOf({}), "standaard");
+t("variantIdOf met id", L.variantIdOf({ variantId: "netheid" }), "netheid");
+t("mergeVariants: legacy wordt virtuele standaard", L.mergeVariants([], { version: 3, sections: [{ locationId: "a" }] }).map((v) => [v.id, v.virtual, v.version, v.compare]), [["standaard", true, 3, true]]);
+t("mergeVariants: echte standaard wint van legacy", L.mergeVariants([{ id: "standaard", name: "Standaard", order: 1, virtual: false }], { version: 3, sections: [] }).map((v) => [v.id, v.virtual]), [["standaard", false]]);
+t("mergeVariants: sorteren op order", L.mergeVariants([{ id: "b", name: "B", order: 2 }, { id: "a", name: "A", order: 1 }], null).map((v) => v.id), ["a", "b"]);
+const hist = [
+  { id: "h4", variantId: "netheid", auditDate: "2026-11-20" },
+  { id: "h3", auditDate: "2026-11-15" },
+  { id: "h2", variantId: "standaard", auditDate: "2026-11-10" },
+  { id: "h1", auditDate: "2026-11-01" }
+];
+t("previousSameVariant: zelfde variant, eerder, max 2", L.previousSameVariant(hist, { id: "cur", auditDate: "2026-11-23" }).map((a) => a.id), ["h3", "h2"]);
+t("previousSameVariant: andere variant niet", L.previousSameVariant(hist, { id: "cur", variantId: "netheid", auditDate: "2026-11-23" }).map((a) => a.id), ["h4"]);
+t("previousSameVariant: oudere audit vergelijkt niet met nieuwere", L.previousSameVariant(hist, { id: "h2", variantId: "standaard", auditDate: "2026-11-10" }).map((a) => a.id), ["h1"]);
+t("structureel dalend: 90 > 80 > 70", L.isStructuralDecline([90, 80, 70]), true);
+t("niet dalend bij gelijk", L.isStructuralDecline([90, 80, 80]), false);
+t("niet dalend bij ontbrekend", L.isStructuralDecline([null, 80, 70]), false);
+const sc = (s) => s.sc;
+const cr = L.compareRows({ sections: [{ locationId: "a", label: "A", sc: { good: 7, total: 10 } }, { locationId: "b", label: "B", sc: { good: 5, total: 5 } }] },
+  [{ sections: [{ locationId: "a", sc: { good: 8, total: 10 } }] }, { sections: [{ locationId: "a", sc: { good: 9, total: 10 } }, { locationId: "b", sc: { good: 4, total: 5 } }] }], sc);
+t("compareRows: percentages oudste→nieuwste", cr.rows.map((r) => r.pcts), [[90, 80, 70], [80, null, 100]]);
+t("compareRows: dalend gemarkeerd", cr.rows.map((r) => r.declining), [true, false]);
+t("compareRows: totaal", cr.total.pcts, [87, 80, 80]);
+t("compareRows: één vorige → null aangevuld", L.compareRows({ sections: [{ locationId: "a", sc: { good: 1, total: 2 } }] }, [{ sections: [{ locationId: "a", sc: { good: 2, total: 2 } }] }], sc).rows[0].pcts, [null, 100, 50]);
+const emps = [{ id: "e1", name: "Anna" }];
+t("cleanCustomTask: persoon en spoed", (({ id, ...r }) => r)(L.cleanCustomTask({ text: " Lamp ", assigneeId: "e1", urgent: 1, dueDate: "2026-11-30" }, emps).task), { text: "Lamp", assigneeId: "e1", assigneeName: "Anna", urgent: true, dueDate: "2026-11-30" });
+t("cleanCustomTask: onbekende persoon → Allen", L.cleanCustomTask({ text: "x", assigneeId: "zz" }, emps).task.assigneeId, "ALLEN");
+t("cleanCustomTask: lege tekst faalt", L.cleanCustomTask({ text: " " }, emps).error, "Vul de omschrijving in.");
+t("cleanCustomTask: foute datum faalt", L.cleanCustomTask({ text: "x", dueDate: "30-11" }, emps).error, "Ongeldige streefdatum.");
+t("customTaskTitle: label + eerste regel, max 120", L.customTaskTitle("Pad 16", "Lamp\nmeer") + "|" + L.customTaskTitle("P", "x".repeat(200)).length, "Pad 16 - Lamp|120");
+
 for (const x of results) console.log(x.join(" | "));
 const pass = results.filter((x) => x[0] === "PASS").length;
 console.log(`${pass}/${results.length} PASS`);

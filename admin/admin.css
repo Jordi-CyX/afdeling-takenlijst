@@ -1219,3 +1219,19 @@ header .update-bar.hidden { display: none; }
 .maintenance-card { margin-bottom: 1rem; }
 .maintenance-card textarea { width: 100%; }
 .maintenance-on { color: var(--danger); font-weight: 700; }
+
+/* ---- V3A punt 7: audit-varianten, eigen audittaken, PDF per pagina ---- */
+.audit-variant-pick { display: grid; gap: 0.25rem; max-width: 22rem; margin: 0 0 0.75rem; font-weight: 600; }
+.audit-mode { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.audit-custom .audit-task-preview li { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; }
+.audit-ct-form { display: grid; gap: 0.5rem; margin-top: 0.5rem; padding: 0.6rem; border: 1px solid #CFCBC8; border-radius: 8px; background: #FAF9F8; }
+.audit-ct-form label { display: grid; gap: 0.2rem; }
+.check-row { display: flex !important; align-items: center; gap: 0.4rem; }
+.check-row input { width: auto; }
+.variant-list .v2-row-main { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.variant-list li.inactive { opacity: 0.7; }
+.print-page { break-after: page; page-break-after: always; }
+.print-page:last-of-type { break-after: auto; page-break-after: auto; }
+.print-table tr.dev td:first-child { font-weight: 700; }
+.print-compare tr.declining td { font-weight: 700; }
+.print-meta th { width: 30%; }

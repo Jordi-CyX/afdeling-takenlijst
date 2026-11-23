@@ -21,12 +21,25 @@ import {
 import { db, localDateKey, amsterdamDateKey, formatDate, formatDateTime } from "../shared.js";
 import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js?v=28";
 import { AUDIT_SETTINGS, LOCATION_PLACEHOLDER, DEFAULT_LOCATIONS, defaultAuditSections } from "./audit-defaults.js?v=28";
+import {
+  DEFAULT_VARIANT_ID, VARIANT_NAME_MAX, RANBY_MAX, CUSTOM_TASK_TEXT_MAX,
+  variantIdOf, normalizeVariant, mergeVariants, previousSameVariant, compareRows, cleanCustomTask, customTaskTitle
+} from "./v3a-logic.js?v=28";
 
 let ctx = null;
 let locationsDoc = null; // { items } of null (nog niet aangemaakt)
 let locationsReady = false;
 let auditConfig = null; // { version, sections } of null
 let auditConfigReady = false;
+// V3A punt 7: audit-varianten (auditVariants/{id}); auditConfig/current telt als virtuele variant "standaard".
+let variantDocs = [];
+let variantsReady = false;
+let editVariantId = localStorage.getItem("zeiklijst-admin-edit-variant") || "";
+let startVariantId = localStorage.getItem("zeiklijst-admin-start-variant") || "";
+let historyVariant = null; // null = automatisch (variant van de laatste audit), "all" = alle
+let ctDraft = null; // open formulier "Zelf aanmaken": { si, qi, text, assigneeId, urgent, dueDate, focus }
+let deletingAudit = false;
+const RANBY_KEY = "zeiklijst-admin-audit-ranby";
 let audits = []; // laatste N (alle statussen)
 let activeAuditDoc = null; // { id, data } van de audit met status "bezig"
 let completions = new Map(); // taskId -> { employeeId, name, at (ISO), legacy }
@@ -65,6 +78,15 @@ export function startV2Listeners() {
     auditConfigReady = true;
     renderV2();
   }, noop);
+  // Zonder nieuwe regels (nog niet live) faalt dit met permission-denied: dan blijft auditConfig/current de enige variant.
+  onSnapshot(collection(db, "auditVariants"), (snap) => {
+    variantDocs = snap.docs.map((d) => normalizeVariant(d.id, d.data()));
+    variantsReady = true;
+    renderV2();
+  }, () => {
+    variantsReady = true;
+    renderV2();
+  });
   onSnapshot(query(collection(db, "audits"), orderBy("startedAt", "desc"), limit(AUDIT_SETTINGS.historyLimit)), (snap) => {
     audits = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderV2();
@@ -175,17 +197,66 @@ export async function seedLocations() {
 }
 
 export async function seedAuditConfig() {
-  if (auditConfig) return;
-  const ok = await ctx.confirmAction("De standaard vragenlijst en ronde aanmaken (volgens de afspraken van 19-11)?", { title: "Vragenlijst", confirmText: "Aanmaken" });
+  if (variants().length) return;
+  const ok = await ctx.confirmAction("De standaard vragenlijst en ronde aanmaken (volgens de afspraken van 19-11)? Dit wordt de variant \"Standaard\".", { title: "Vragenlijst", confirmText: "Aanmaken" });
   if (!ok) return;
-  const snap = await getDoc(doc(db, "auditConfig", "current"));
-  if (snap.exists()) return;
-  if (await saveConfig(defaultAuditSections(), 0)) ctx.showToast("Vragenlijst aangemaakt.", "ok");
+  const [a, b] = await Promise.all([getDoc(doc(db, "auditConfig", "current")), getDoc(doc(db, "auditVariants", DEFAULT_VARIANT_ID))]);
+  if (a.exists() || b.exists()) return; // nooit overschrijven
+  const v = { id: DEFAULT_VARIANT_ID, name: "Standaard", compare: true, active: true, order: 1, version: 0, sections: [], virtual: true };
+  if (await saveVariant(v, { sections: defaultAuditSections() })) ctx.showToast("Vragenlijst aangemaakt.", "ok");
 }
 
-function saveConfig(sections, prevVersion) {
+// ---------- V3A punt 7: varianten ----------
+function variants() {
+  return mergeVariants(variantDocs, auditConfig);
+}
+
+function variantById(id) {
+  return variants().find((v) => v.id === id) || null;
+}
+
+function configReady() {
+  return auditConfigReady && variantsReady;
+}
+
+function editVariant() {
+  const list = variants();
+  return list.find((v) => v.id === editVariantId) || list[0] || null;
+}
+
+function startVariant() {
+  const list = variants().filter((v) => v.active);
+  return list.find((v) => v.id === startVariantId) || list[0] || null;
+}
+
+function auditVariantName(a) {
+  const v = variantById(variantIdOf(a));
+  return (v && v.name) || a.variantName || "Standaard";
+}
+
+// Vergelijken volgt de huidige instelling van de variant; bestaat die niet meer, dan de stand bij het lopen.
+function auditCompares(a) {
+  const v = variantById(variantIdOf(a));
+  return v ? v.compare : a.compare !== false;
+}
+
+// Schrijft de hele variant (ook de eerste keer voor de virtuele "standaard": zo wordt auditConfig/current
+// zonder script de eerste variant). version gaat alleen omhoog als de vragenlijst verandert.
+function saveVariant(v, patch = {}) {
+  const sections = patch.sections || v.sections;
   const clean = JSON.parse(JSON.stringify(sections.map((s, i) => ({ ...s, order: i + 1 }))));
-  return ctx.safeWrite(() => setDoc(doc(db, "auditConfig", "current"), { version: (prevVersion || 0) + 1, updatedAt: serverTimestamp(), sections: clean }));
+  const data = {
+    name: String(patch.name ?? v.name).trim().slice(0, VARIANT_NAME_MAX),
+    compare: Boolean(patch.compare ?? v.compare),
+    active: Boolean(patch.active ?? v.active),
+    order: Number(patch.order ?? v.order) || 1,
+    version: Math.max(1, (Number(v.version) || 0) + (patch.sections ? 1 : 0)),
+    sections: clean,
+    updatedAt: serverTimestamp()
+  };
+  const isNew = v.virtual || patch.create;
+  if (isNew) data.createdAt = Timestamp.now();
+  return ctx.safeWrite(() => setDoc(doc(db, "auditVariants", v.id), data, { merge: !isNew }));
 }
 
 // Vult een <select> met actieve locaties. Eigenaar 13:01: de admin kiest altijd een locatie, dus standaard
@@ -415,6 +486,7 @@ function fillPlaceholder(text, label) {
 function questionComplete(q) {
   if (q.answer !== "ja" && q.answer !== "nee") return false;
   if (q.answer !== q.trigger) return true;
+  if (q.mode === "zelf") return Array.isArray(q.customTasks) && q.customTasks.length > 0;
   if (q.followUp) return q.followUpAnswer === "ja" || q.followUpAnswer === "nee";
   if (Array.isArray(q.reasons) && q.reasons.length) return Array.isArray(q.reasonIds) && q.reasonIds.length > 0;
   return true;
@@ -426,6 +498,7 @@ function sectionComplete(s) {
 
 function questionGood(q) {
   if (q.answer !== q.trigger) return true;
+  if (q.mode === "zelf") return false;
   if (q.followUp && q.followUpAnswer !== q.followUp.trigger) return AUDIT_SETTINGS.emptyWithoutStockCountsAsGood;
   return false;
 }
@@ -452,6 +525,17 @@ function questionTasks(q, s, auditId, auditDate) {
   const label = s.label || sectionLabel(s.locationId);
   const base = { questionId: q.id, locationId: s.locationId, label, question: q };
   const list = [];
+  if (q.mode === "zelf") {
+    // "Zelf aanmaken": alleen de eigen taken, geen standaardtaak (ideeëndoc punt 7).
+    return (q.customTasks || []).map((c) => ({
+      ...base,
+      custom: c,
+      title: customTaskTitle(label, c.text),
+      id: `audit-${auditId}-${s.locationId}-${q.id}-c${c.id}`,
+      auditId,
+      auditDate
+    }));
+  }
   if (q.followUp) {
     if (q.followUpAnswer === q.followUp.trigger) list.push({ ...base, title: fillPlaceholder(q.followUp.taskText, label) });
   } else if (Array.isArray(q.reasons) && q.reasons.length) {
@@ -484,6 +568,10 @@ function describeAnswer(q) {
     const labels = q.reasons.filter((r) => (q.reasonIds || []).includes(r.id)).map((r) => r.label);
     if (labels.length) parts.push(`Waarom: ${labels.join(", ")}`);
   }
+  if (q.mode === "zelf" && q.answer === q.trigger) {
+    const n = (q.customTasks || []).length;
+    parts.push(`Zelf aangemaakt: ${n} ${n === 1 ? "taak" : "taken"}`);
+  }
   return parts.join(" · ");
 }
 
@@ -491,13 +579,14 @@ function taskPayload(t) {
   const q = t.question;
   // Eigenaar 13:01: audit-notities alleen in de audit en de PDF, niet in de taak (die lezen alle medewerkers).
   const lines = [`Audit ${formatDate(t.auditDate)} · ${t.label}`, describeAnswer(q)];
+  if (t.custom) lines.push("", t.custom.text);
   const source = { type: "audit", auditId: t.auditId, auditDate: t.auditDate, locationId: t.locationId, questionId: t.questionId };
   if (t.reasonId) source.reasonId = t.reasonId;
   return {
     title: t.title,
     description: lines.join("\n").slice(0, 2000),
-    assigneeId: "ALLEN",
-    assigneeName: "Allen",
+    assigneeId: t.custom ? t.custom.assigneeId : "ALLEN",
+    assigneeName: t.custom ? t.custom.assigneeName : "Allen",
     status: "open",
     createdAt: new Date().toISOString(),
     pendingAt: null,
@@ -508,13 +597,13 @@ function taskPayload(t) {
     photos: [],
     location: t.label,
     locationId: t.locationId,
-    urgent: false,
+    urgent: Boolean(t.custom && t.custom.urgent),
     source
   };
 }
 
-function buildSnapshot() {
-  const sections = (auditConfig ? auditConfig.sections : [])
+function buildSnapshot(variant) {
+  const sections = (variant ? variant.sections : [])
     .filter((s) => s.active && s.questions.length)
     .map((s) => ({
       locationId: s.locationId,
@@ -543,6 +632,10 @@ function draftFromDoc(id, data) {
     auditDate: data.auditDate,
     startedAt: data.startedAt,
     configVersion: data.configVersion || 0,
+    ...(data.variantId ? { variantId: data.variantId } : {}),
+    ...(typeof data.variantName === "string" ? { variantName: data.variantName } : {}),
+    ...(typeof data.compare === "boolean" ? { compare: data.compare } : {}),
+    ...(typeof data.ranBy === "string" ? { ranBy: data.ranBy } : {}),
     sections: JSON.parse(JSON.stringify(data.sections || []))
   };
 }
@@ -591,7 +684,8 @@ export function isV2Busy() {
   if (draft && auditMode !== "start" && auditVisible) return true;
   if (savePending || finishing || exportBusy > 0) return true;
   if (document.body.classList.contains("print-mode")) return true;
-  return Boolean(document.querySelector("[data-q-form]"));
+  if (deletingAudit || (ctDraft && String(ctDraft.text || "").trim())) return true;
+  return Boolean(document.querySelector("[data-q-form], [data-variant-add] input:not(:placeholder-shown)"));
 }
 
 async function saveDraft() {
@@ -657,17 +751,41 @@ async function startAudit() {
     resumeAudit();
     return;
   }
-  if (!locationsDoc || !auditConfig) {
+  const variant = startVariant();
+  if (!locationsDoc || !variant) {
     ctx.showToast("Maak eerst de locatielijst en de vragenlijst aan (Locaties & vragen).");
     return;
   }
-  const sections = buildSnapshot();
+  const sections = buildSnapshot(variant);
   if (!sections.length) {
-    ctx.showToast("De ronde heeft geen actieve onderdelen met vragen.");
+    ctx.showToast(`De ronde van "${variant.name}" heeft geen actieve onderdelen met vragen.`);
+    return;
+  }
+  // Punt 7: wie de audit loopt (komt op pagina 1 van de PDF); dit toestel onthoudt de laatste naam.
+  const res = await ctx.showDialog({
+    title: "Audit starten",
+    message: `Variant: ${variant.name}${variant.compare ? " (wordt vergeleken met eerdere audits van deze variant)" : ""}. Wie loopt de audit?`,
+    input: true,
+    inputLabel: "Gelopen door",
+    inputValue: localStorage.getItem(RANBY_KEY) || "",
+    confirmText: "Starten"
+  });
+  if (!res || !res.ok) return;
+  const ranBy = String(res.value || "").trim().slice(0, RANBY_MAX);
+  if (!ranBy) {
+    ctx.showToast("Vul in wie de audit loopt.");
+    return;
+  }
+  localStorage.setItem(RANBY_KEY, ranBy);
+  if (activeAuditDoc) {
+    resumeAudit();
     return;
   }
   const ref = doc(collection(db, "audits"));
-  draft = { id: ref.id, status: "bezig", auditDate: amsterdamDateKey(), startedAt: Timestamp.now(), configVersion: auditConfig.version, sections };
+  draft = {
+    id: ref.id, status: "bezig", auditDate: amsterdamDateKey(), startedAt: Timestamp.now(), configVersion: variant.version,
+    variantId: variant.id, variantName: variant.name, compare: variant.compare, ranBy, sections
+  };
   auditPos = 0;
   auditMode = "run";
   storePos();
@@ -743,6 +861,11 @@ async function finishAudit() {
     for (const t of todo) {
       batch.set(doc(db, "tasks", t.id), taskPayload(t));
       n += 1;
+      // Streefdatum van een zelf aangemaakte taak staat (zoals bij gewone taken) in taskMeta.
+      if (t.custom && t.custom.dueDate) {
+        batch.set(doc(db, "taskMeta", t.id), { dueDate: t.custom.dueDate });
+        n += 1;
+      }
       if (n >= AUDIT_SETTINGS.batchSize) {
         await batch.commit();
         batch = writeBatch(db);
@@ -799,14 +922,17 @@ function renderAudit() {
   const root = document.getElementById("audit-root");
   if (!root) return;
   // Niet opnieuw tekenen terwijl de admin een notitie typt.
-  if (auditMode === "run" && root.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA") return;
+  const ae = document.activeElement;
+  if (auditMode === "run" && root.contains(ae) && (ae.tagName === "TEXTAREA" || (ae.closest && ae.closest("[data-ct-form]")))) return;
   const { dom } = ctx;
   if (activeAuditDoc && draft && draft.id !== activeAuditDoc.id && !finishing) draft = null;
   if (auditMode !== "start" && !draft) auditMode = "start";
   if (auditMode === "start") {
     const missing = [];
     if (locationsReady && !locationsDoc) missing.push("locatielijst");
-    if (auditConfigReady && !auditConfig) missing.push("vragenlijst");
+    if (configReady() && !variants().length) missing.push("vragenlijst");
+    const startable = variants().filter((v) => v.active);
+    const sv = startVariant();
     const a = activeAuditDoc;
     const secs = a ? (a.data.sections || []) : [];
     const answered = secs.filter(sectionComplete).length;
@@ -815,14 +941,18 @@ function renderAudit() {
         ${missing.length ? dom`<div class="v2-setup"><p>Nog niet ingesteld: ${missing.join(" en ")}. Ga naar <strong>Locaties &amp; vragen</strong> om de standaardlijst aan te maken.</p><button type="button" data-goto-beheer>Naar Locaties &amp; vragen</button></div>` : ""}
         ${a ? dom`
           <div class="audit-resume">
-            <p><strong>Er loopt een audit</strong> van ${formatDate(a.data.auditDate)}: ${answered} van ${secs.length} onderdelen ingevuld.</p>
+            <p><strong>Er loopt een audit</strong> (${auditVariantName(a.data)}) van ${formatDate(a.data.auditDate)}${a.data.ranBy ? `, gelopen door ${a.data.ranBy}` : ""}: ${answered} van ${secs.length} onderdelen ingevuld.</p>
             <button type="button" class="audit-big" data-resume>Audit hervatten</button>
             <button type="button" class="secondary" data-discard>Lopende audit verwijderen</button>
           </div>` : dom`
           <div>
-            <p class="section-intro">Loop de ronde langs alle onderdelen. Elk onderdeel is verplicht. Bij een afwijking maakt de app na de controle automatisch een taak voor iedereen.</p>
-            <button type="button" class="audit-big" data-start data-disabled="${flag(missing.length)}">Audit starten</button>
-            ${auditConfig ? dom`<p class="pin-meta">Ronde: ${auditConfig.sections.filter((s) => s.active).map((s) => sectionLabel(s.locationId)).join(" → ")}</p>` : ""}
+            <p class="section-intro">Kies de variant en loop de ronde langs alle onderdelen. Elk onderdeel is verplicht. Bij een afwijking maakt de app na de controle een standaardtaak voor iedereen, of je maakt zelf één of meer taken aan.</p>
+            ${startable.length > 1 ? dom`<label class="audit-variant-pick">Variant
+              <select data-start-variant>${startable.map((v) => dom`<option value="${v.id}" data-selected="${flag(sv && v.id === sv.id)}">${v.name}</option>`)}</select>
+            </label>` : ""}
+            <button type="button" class="audit-big" data-start data-disabled="${flag(missing.length || !sv)}">Audit starten${sv && startable.length > 1 ? ` (${sv.name})` : ""}</button>
+            ${sv ? dom`<p class="pin-meta">Ronde: ${sv.sections.filter((s) => s.active).map((s) => sectionLabel(s.locationId)).join(" → ")}</p>
+            <p class="pin-meta">Vergelijken: ${sv.compare ? "aan (de PDF vergelijkt met de vorige 2 audits van deze variant)" : "uit"}</p>` : ""}
           </div>`}
       </div>`);
     applyFlags(root);
@@ -831,6 +961,13 @@ function renderAudit() {
     b("[data-resume]", resumeAudit);
     b("[data-discard]", discardAudit);
     b("[data-goto-beheer]", () => ctx.showSection("beheer"));
+    const pick = root.querySelector("[data-start-variant]");
+    if (pick) pick.onchange = () => {
+      startVariantId = pick.value;
+      localStorage.setItem("zeiklijst-admin-start-variant", startVariantId);
+      pick.blur();
+      renderAudit();
+    };
     return;
   }
   if (auditMode === "review") {
@@ -845,7 +982,7 @@ function renderAudit() {
   root.replaceChildren(dom`
     <div class="audit-run">
       <div class="audit-head">
-        <span class="audit-step">Onderdeel ${auditPos + 1} van ${total}</span>
+        <span class="audit-step">${draft.variantName || "Standaard"} · onderdeel ${auditPos + 1} van ${total}</span>
         <h3 class="audit-section-title">${s.label}</h3>
         <progress max="${total}" value="${draft.sections.filter(sectionComplete).length}" aria-label="Voortgang"></progress>
       </div>
@@ -869,6 +1006,11 @@ function renderAudit() {
     </div>`);
   applyFlags(root);
   bindRun(root, s);
+  if (ctDraft && ctDraft.focus) {
+    ctDraft.focus = false;
+    const f = root.querySelector("[data-ct-form] [data-ct-text]");
+    if (f) f.focus();
+  }
 }
 
 function questionCard(q, qi, s) {
@@ -883,7 +1025,13 @@ function questionCard(q, qi, s) {
         <button type="button" class="audit-ans ja" data-ans="ja" aria-pressed="${pressed("ja", q.answer)}">Ja</button>
         <button type="button" class="audit-ans nee" data-ans="nee" aria-pressed="${pressed("nee", q.answer)}">Nee</button>
       </div>
-      ${showExtra && q.followUp ? dom`
+      ${showExtra ? dom`
+        <div class="audit-mode" role="group" aria-label="Welke taak?">
+          <button type="button" class="audit-reason" data-mode="standaard" aria-pressed="${q.mode === "zelf" ? "false" : "true"}">Standaard taak</button>
+          <button type="button" class="audit-reason" data-mode="zelf" aria-pressed="${q.mode === "zelf" ? "true" : "false"}">Zelf aanmaken</button>
+        </div>` : ""}
+      ${showExtra && q.mode === "zelf" ? customTasksBlock(q, qi, s) : ""}
+      ${showExtra && q.mode !== "zelf" && q.followUp ? dom`
         <div class="audit-follow">
           <p class="audit-q-text">${q.followUp.text}</p>
           <div class="audit-answers">
@@ -891,14 +1039,14 @@ function questionCard(q, qi, s) {
             <button type="button" class="audit-ans nee" data-fans="nee" aria-pressed="${pressed("nee", q.followUpAnswer)}">Nee</button>
           </div>
         </div>` : ""}
-      ${showExtra && Array.isArray(q.reasons) ? dom`
+      ${showExtra && q.mode !== "zelf" && Array.isArray(q.reasons) ? dom`
         <div class="audit-follow">
           <p class="audit-q-text">Waarom?${AUDIT_SETTINGS.multipleReasons ? " (meerdere mogelijk)" : ""}</p>
           <div class="audit-reasons">
             ${q.reasons.map((r) => dom`<button type="button" class="audit-reason" data-reason="${r.id}" aria-pressed="${(q.reasonIds || []).includes(r.id) ? "true" : "false"}">${r.label}</button>`)}
           </div>
         </div>` : ""}
-      ${tasks.length ? dom`<ul class="audit-task-preview">${tasks.map((t) => dom`<li>Taak: ${t.title}</li>`)}</ul>` : ""}
+      ${tasks.length && q.mode !== "zelf" ? dom`<ul class="audit-task-preview">${tasks.map((t) => dom`<li>Taak: ${t.title}</li>`)}</ul>` : ""}
       <details class="audit-note" data-open="${flag(q.note)}">
         <summary>${q.note ? "Notitie" : "Notitie toevoegen"}</summary>
         <textarea rows="2" maxlength="${AUDIT_SETTINGS.noteMax}" data-note aria-label="Notitie bij deze vraag" data-initial="${q.note || ""}"></textarea>
@@ -906,9 +1054,112 @@ function questionCard(q, qi, s) {
     </div>`;
 }
 
+function customTaskMeta(c) {
+  const bits = [c.assigneeName || "Allen"];
+  if (c.urgent) bits.push("spoed");
+  if (c.dueDate) bits.push(`streefdatum ${formatDate(c.dueDate)}`);
+  return bits.join(" · ");
+}
+
+// Punt 7 / ideeëndoc: eigen taken bij een afwijking (geen foto). Meerdere taken per vraag mogelijk.
+function customTasksBlock(q, qi, s) {
+  const { dom } = ctx;
+  const list = q.customTasks || [];
+  const label = s.label || sectionLabel(s.locationId);
+  const si = draft.sections.indexOf(s);
+  const open = !list.length || (ctDraft && ctDraft.si === si && ctDraft.qi === qi);
+  const d = open && ctDraft && ctDraft.si === si && ctDraft.qi === qi ? ctDraft : { text: "", assigneeId: "ALLEN", urgent: false, dueDate: "" };
+  const emps = (ctx.getEmployees ? ctx.getEmployees() : []);
+  return dom`
+    <div class="audit-follow audit-custom">
+      ${list.length ? dom`<ul class="audit-task-preview">${list.map((c) => dom`<li>
+        <span>Taak: ${customTaskTitle(label, c.text)} <span class="pin-meta">(${customTaskMeta(c)})</span></span>
+        <button type="button" class="secondary audit-small" data-ct-del="${c.id}">Weghalen</button>
+      </li>`)}</ul>` : dom`<p class="pin-meta">Nog geen eigen taak. Voeg er minstens één toe (of kies Standaard taak).</p>`}
+      ${open ? dom`<div class="audit-ct-form" data-ct-form>
+        <label>Omschrijving <textarea rows="2" maxlength="${CUSTOM_TASK_TEXT_MAX}" data-ct-text data-initial="${d.text || ""}"></textarea></label>
+        <label>Persoon
+          <select data-ct-emp>
+            <option value="ALLEN" data-selected="${flag(!d.assigneeId || d.assigneeId === "ALLEN")}">Allen</option>
+            ${emps.map((e) => dom`<option value="${e.id}" data-selected="${flag(d.assigneeId === e.id)}">${e.name}</option>`)}
+          </select>
+        </label>
+        <label class="check-row"><input type="checkbox" data-ct-urgent data-checked="${flag(d.urgent)}"> Spoed</label>
+        <label>Streefdatum (optioneel) <input type="date" data-ct-due value="${d.dueDate || ""}"></label>
+        <p class="form-error hidden" data-ct-error></p>
+        <div class="form-actions">
+          <button type="button" data-ct-add="next">Toevoegen en verdergaan</button>
+          <button type="button" class="secondary" data-ct-add="new">Toevoegen en nieuwe taak aanmaken</button>
+          ${list.length ? dom`<button type="button" class="secondary" data-ct-cancel>Annuleren</button>` : ""}
+        </div>
+      </div>` : dom`<button type="button" class="secondary audit-small" data-ct-open>Nog een taak toevoegen</button>`}
+    </div>`;
+}
+
+function bindCustomTasks(card, q, qi) {
+  const si = auditPos;
+  const form = card.querySelector("[data-ct-form]");
+  const read = () => ({
+    si, qi,
+    text: form.querySelector("[data-ct-text]").value,
+    assigneeId: form.querySelector("[data-ct-emp]").value,
+    urgent: form.querySelector("[data-ct-urgent]").checked,
+    dueDate: form.querySelector("[data-ct-due]").value
+  });
+  if (form) {
+    // Ingevulde waarden bewaren, zodat een hertekening (bijv. door een sync) niets wist.
+    form.oninput = () => { ctDraft = read(); };
+    form.onchange = () => { ctDraft = read(); };
+    form.querySelectorAll("[data-ct-add]").forEach((btn) => {
+      btn.onclick = () => {
+        const res = cleanCustomTask(read(), ctx.getEmployees ? ctx.getEmployees() : []);
+        const err = form.querySelector("[data-ct-error]");
+        if (res.error) {
+          err.textContent = res.error;
+          err.classList.remove("hidden");
+          return;
+        }
+        const taken = new Set((q.customTasks || []).map((c) => c.id));
+        let n = (q.customTasks || []).length + 1;
+        while (taken.has(String(n))) n += 1;
+        res.task.id = String(n);
+        q.customTasks = [...(q.customTasks || []), res.task];
+        ctDraft = btn.dataset.ctAdd === "new" ? { si, qi, text: "", assigneeId: "ALLEN", urgent: false, dueDate: "", focus: true } : null;
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        scheduleSave(true);
+        renderAudit();
+        ctx.showToast("Taak toegevoegd (wordt aangemaakt bij afronden).", "ok");
+      };
+    });
+    const cancel = form.querySelector("[data-ct-cancel]");
+    if (cancel) cancel.onclick = () => { ctDraft = null; cancel.blur(); renderAudit(); };
+  }
+  const openBtn = card.querySelector("[data-ct-open]");
+  if (openBtn) openBtn.onclick = () => {
+    ctDraft = { si, qi, text: "", assigneeId: "ALLEN", urgent: false, dueDate: "", focus: true };
+    renderAudit();
+  };
+  card.querySelectorAll("[data-ct-del]").forEach((btn) => {
+    btn.onclick = () => {
+      q.customTasks = (q.customTasks || []).filter((c) => c.id !== btn.dataset.ctDel);
+      scheduleSave(true);
+      renderAudit();
+    };
+  });
+}
+
 function bindRun(root, s) {
   root.querySelectorAll(".audit-q").forEach((card) => {
     const q = s.questions[Number(card.dataset.qi)];
+    card.querySelectorAll("[data-mode]").forEach((btn) => {
+      btn.onclick = () => {
+        q.mode = btn.dataset.mode === "zelf" ? "zelf" : "standaard";
+        if (q.mode === "zelf" && !Array.isArray(q.customTasks)) q.customTasks = [];
+        scheduleSave(true);
+        renderAudit();
+      };
+    });
+    bindCustomTasks(card, q, Number(card.dataset.qi));
     card.querySelectorAll("[data-ans]").forEach((btn) => {
       btn.onclick = () => {
         q.answer = btn.dataset.ans;
@@ -989,7 +1240,7 @@ function renderReview(root) {
   root.replaceChildren(dom`
     <div class="audit-review">
       <h3>Controle voor het aanmaken</h3>
-      <p class="section-intro">Audit van ${formatDate(draft.auditDate)}. Controleer de taken en notities. Pas daarna worden de taken aangemaakt (voor iedereen, zonder streefdatum).</p>
+      <p class="section-intro">Audit van ${formatDate(draft.auditDate)}. Controleer de taken en notities. Pas daarna worden de taken aangemaakt. Standaardtaken zijn voor iedereen, zonder streefdatum; zelf aangemaakte taken krijgen de gekozen persoon, spoed en streefdatum.</p>
       ${incomplete.length ? dom`<div class="v2-setup"><p>Nog niet ingevuld:</p>${incomplete.map(({ s, i }) => dom`<button type="button" class="secondary" data-jump="${i}">${s.label}</button>`)}</div>` : ""}
       <p class="review-total"><strong>${list.length}</strong> ${list.length === 1 ? "taak" : "taken"} · ${draft.sections.reduce((n, s) => n + s.questions.filter((q) => (q.note || "").trim()).length, 0)} notities</p>
       ${draft.sections.map((s, i) => {
@@ -1003,7 +1254,7 @@ function renderReview(root) {
               <span class="score-pill ${scoreClass(sc.good, sc.total)}">${sc.good}/${sc.total}</span>
               <button type="button" class="secondary audit-small" data-jump="${i}">Wijzigen</button>
             </div>
-            ${tasks.length ? dom`<ul class="review-tasks">${tasks.map((t) => dom`<li>${t.title}</li>`)}</ul>` : dom`<p class="pin-meta">Geen taken.</p>`}
+            ${tasks.length ? dom`<ul class="review-tasks">${tasks.map((t) => dom`<li>${t.title}${t.custom ? dom` <span class="pin-meta">(${customTaskMeta(t.custom)})</span>` : ""}</li>`)}</ul>` : dom`<p class="pin-meta">Geen taken.</p>`}
             ${notes.map((q) => dom`<p class="review-note"><strong>Notitie</strong> (${q.text}): ${q.note}</p>`)}
           </div>`;
       })}
@@ -1066,11 +1317,20 @@ function renderHistory() {
   const root = document.getElementById("audits-root");
   if (!root) return;
   const { dom } = ctx;
-  const list = completedAudits();
-  if (!list.length) {
+  const all = completedAudits();
+  if (!all.length) {
     root.replaceChildren(dom`<p class="empty-state">Nog geen afgeronde audits.</p>`);
     return;
   }
+  // Punt 7: geschiedenis en trend per variant (alleen binnen dezelfde variant vergelijken).
+  const ids = [];
+  for (const a of all) if (!ids.includes(variantIdOf(a))) ids.push(variantIdOf(a));
+  for (const v of variants()) if (!ids.includes(v.id)) ids.push(v.id);
+  const nameOf = (id) => { const v = variantById(id); if (v) return v.name; const a = all.find((x) => variantIdOf(x) === id); return a ? auditVariantName(a) : id; };
+  const sel = historyVariant === "all" ? "all" : (ids.includes(historyVariant) ? historyVariant : variantIdOf(all[0]));
+  const list = sel === "all" ? all : all.filter((a) => variantIdOf(a) === sel);
+  const selVariant = sel === "all" ? null : variantById(sel);
+  const compareOn = sel !== "all" && (selVariant ? selVariant.compare : list.some((a) => a.compare !== false));
   const trendAudits = list.slice(0, 6).reverse();
   const sectionIds = [];
   for (const a of list.slice(0, 6)) for (const s of a.sections || []) if (!sectionIds.includes(s.locationId)) sectionIds.push(s.locationId);
@@ -1080,9 +1340,18 @@ function renderHistory() {
     const sc = s.score || sectionScore(s);
     return dom`<td class="${scoreClass(sc.good, sc.total)}">${pct(sc.good, sc.total)}%</td>`;
   };
+  const picker = ids.length > 1 ? dom`<label class="audit-variant-pick">Variant
+      <select data-history-variant>
+        ${ids.map((id) => dom`<option value="${id}" data-selected="${flag(sel === id)}">${nameOf(id)}</option>`)}
+        <option value="all" data-selected="${flag(sel === "all")}">Alle varianten</option>
+      </select>
+    </label>` : "";
   root.replaceChildren(dom`
+    ${picker}
+    ${!list.length ? dom`<p class="empty-state">Nog geen afgeronde audits van deze variant.</p>` : ""}
+    ${list.length && compareOn ? dom`
     <h3>Trend per onderdeel</h3>
-    <p class="pin-meta">Score = aantal vragen zonder afwijking. Laatste ${trendAudits.length} audits, oudste links.</p>
+    <p class="pin-meta">Score = aantal vragen zonder afwijking. Laatste ${trendAudits.length} audits van ${nameOf(sel)}, oudste links.</p>
     <div class="trend-wrap">
       <table class="trend-table">
         <thead><tr><th scope="col">Onderdeel</th>${trendAudits.map((a) => dom`<th scope="col">${formatDate(a.auditDate)}</th>`)}</tr></thead>
@@ -1091,9 +1360,16 @@ function renderHistory() {
           <tr class="trend-total"><th scope="row">Totaal</th>${trendAudits.map((a) => { const t = auditTotal(a); return dom`<td class="${scoreClass(t.good, t.total)}">${pct(t.good, t.total)}%</td>`; })}</tr>
         </tbody>
       </table>
-    </div>
-    <h3>Eerdere audits</h3>
+    </div>` : ""}
+    ${list.length && !compareOn ? dom`<p class="pin-meta">${sel === "all" ? "Kies één variant om de trend te zien; varianten worden niet met elkaar vergeleken." : `Vergelijken staat uit voor ${nameOf(sel)}: geen trend.`}</p>` : ""}
+    ${list.length ? dom`<h3>Eerdere audits</h3>` : ""}
     ${list.map((a) => auditCard(a))}`);
+  applyFlags(root);
+  const hv = root.querySelector("[data-history-variant]");
+  if (hv) hv.onchange = () => { historyVariant = hv.value; hv.blur(); renderHistory(); };
+  root.querySelectorAll("[data-delete-audit]").forEach((btn) => {
+    btn.onclick = () => deleteCompletedAudit(btn.dataset.deleteAudit);
+  });
   root.querySelectorAll("[data-toggle-audit]").forEach((btn) => {
     btn.onclick = () => {
       const id = btn.dataset.toggleAudit;
@@ -1119,8 +1395,8 @@ function auditCard(a) {
     <article class="audit-card">
       <div class="audit-card-head">
         <div>
-          <h4>Audit ${formatDate(a.auditDate)}</h4>
-          <p class="pin-meta">${a.taskCount || 0} taken · ${a.notesCount || 0} notities</p>
+          <h4>Audit ${formatDate(a.auditDate)} · ${auditVariantName(a)}</h4>
+          <p class="pin-meta">${a.ranBy ? `Gelopen door ${a.ranBy} · ` : ""}${a.taskCount || 0} taken · ${a.notesCount || 0} notities</p>
           <p class="pin-meta">Status taken: ${st.open} open · ${st.pending} ter controle · ${st.afgerond} afgerond${st.weg ? ` · ${st.weg} verwijderd` : ""}</p>
         </div>
         <span class="score-pill big ${scoreClass(t.good, t.total)}">${pct(t.good, t.total)}%</span>
@@ -1132,6 +1408,7 @@ function auditCard(a) {
         <button type="button" class="secondary" data-toggle-audit="${a.id}" aria-expanded="${open ? "true" : "false"}">${open ? "Details verbergen" : "Details en notities"}</button>
         <button type="button" class="secondary" data-audit-tasks="${a.id}">Taken bekijken</button>
         <button type="button" data-print-audit="${a.id}">PDF / afdrukken</button>
+        <button type="button" class="danger" data-delete-audit="${a.id}" data-disabled="${flag(deletingAudit)}">Audit verwijderen</button>
       </div>
       ${open ? auditDetails(a) : ""}
     </article>`;
@@ -1150,32 +1427,130 @@ function auditDetails(a) {
   </div>`;
 }
 
+// Punt 7: afgeronde audit verwijderen. Eerst de audit bevestigen, daarna per gekoppelde taak apart
+// (taak + taskMeta + taskCompletions). Bewaarde taken blijven bestaan (met hun herkomst).
+async function deleteCompletedAudit(id) {
+  const a = audits.find((x) => x.id === id);
+  if (!a || deletingAudit) return;
+  const linked = ctx.getRawTasks().filter((t) => (a.taskIds || []).includes(t.id) || (t.source && t.source.auditId === id));
+  const ok = await ctx.confirmAction(
+    `Audit van ${formatDate(a.auditDate)} (${auditVariantName(a)}) verwijderen? ${linked.length ? `Daarna vraag ik per taak (${linked.length}) of die ook weg mag.` : "Er zijn geen gekoppelde taken meer."} Dit kan niet ongedaan worden gemaakt.`,
+    { title: "Audit verwijderen", confirmText: "Verder", danger: true }
+  );
+  if (!ok) return;
+  deletingAudit = true;
+  try {
+    const remove = [];
+    for (let i = 0; i < linked.length; i += 1) {
+      const t = linked[i];
+      const st = t.status === "afgerond" ? "afgerond" : t.status === "pending" ? "ter controle" : "open";
+      const yes = await ctx.confirmAction(`"${t.title}" (${st}) ook verwijderen?`, {
+        title: `Taak ${i + 1} van ${linked.length}`, confirmText: "Taak verwijderen", cancelText: "Taak bewaren", danger: true
+      });
+      if (yes) remove.push(t.id);
+    }
+    const last = await ctx.confirmAction(
+      `Audit verwijderen${remove.length ? ` met ${remove.length} ${remove.length === 1 ? "taak" : "taken"}` : ""}${linked.length - remove.length ? `; ${linked.length - remove.length} ${linked.length - remove.length === 1 ? "taak blijft" : "taken blijven"} bestaan` : ""}.`,
+      { title: "Bevestigen", confirmText: "Definitief verwijderen", danger: true }
+    );
+    if (!last) return;
+    const done = await ctx.safeWrite(async () => {
+      let batch = writeBatch(db);
+      let n = 0;
+      for (const tid of remove) {
+        for (const col of ["tasks", "taskMeta", "taskCompletions"]) batch.delete(doc(db, col, tid));
+        n += 3;
+        if (n >= AUDIT_SETTINGS.batchSize) {
+          await batch.commit();
+          batch = writeBatch(db);
+          n = 0;
+        }
+      }
+      batch.delete(doc(db, "audits", id));
+      await batch.commit();
+    });
+    if (done) {
+      historyOpen.delete(id);
+      ctx.showToast(`Audit verwijderd${remove.length ? ` (${remove.length} ${remove.length === 1 ? "taak" : "taken"})` : ""}.`, "ok");
+    }
+  } finally {
+    deletingAudit = false;
+    renderHistory();
+  }
+}
+
+function startedMs(a) {
+  return a.startedAt && typeof a.startedAt.toMillis === "function" ? a.startedAt.toMillis() : 0;
+}
+
+// Punt 7 PDF: pagina 1 titel + wie liep, daarna één pagina per onderdeel/pad, laatste pagina de
+// vergelijking met de vorige 2 audits van dezelfde variant (alleen als Vergelijken aan staat).
 export function renderPrintView(id) {
   const a = audits.find((x) => x.id === id);
   const view = document.getElementById("print-view");
   if (!a || !view) return false;
   const { dom } = ctx;
   const t = auditTotal(a);
-  const tasks = (a.taskIds || []).map((tid) => ctx.getTasks().find((x) => x.id === tid)).filter(Boolean);
+  const allTasks = ctx.getTasks();
+  const tasks = (a.taskIds || []).map((tid) => allTasks.find((x) => x.id === tid)).filter(Boolean);
   const completed = a.completedAt && a.completedAt.toDate ? formatDateTime(a.completedAt.toDate().toISOString()) : "";
+  const vName = auditVariantName(a);
+  const compare = auditCompares(a);
+  const withMs = (x) => ({ ...x, startedAtMs: startedMs(x) });
+  const prev = compare ? previousSameVariant(completedAudits().map(withMs), withMs(a), 2) : [];
+  const cmp = compare ? compareRows(a, prev, (s) => s.score || sectionScore(s)) : null;
+  const scoreOf = (s) => s.score || sectionScore(s);
+  const statusText = (x) => (x.status === "afgerond" ? "Afgerond" : x.status === "pending" ? "Ter controle" : "Open");
+  const p = (v) => (typeof v === "number" ? `${v}%` : "–");
+  const prevHead = [...prev].reverse();
+  while (prevHead.length < 2) prevHead.unshift(null);
   view.replaceChildren(dom`
     <div class="print-doc">
-      <header class="print-head">
-        <h1>Audit ${formatDate(a.auditDate)}</h1>
-        <p>Zeiklijst · afgerond ${completed} · totaalscore ${t.good}/${t.total} (${pct(t.good, t.total)}%) · ${a.taskCount || 0} taken · ${a.notesCount || 0} notities</p>
-      </header>
-      <table class="print-table">
-        <thead><tr><th>Onderdeel</th><th>Score</th><th>Vragen en antwoorden</th></tr></thead>
-        <tbody>
-          ${(a.sections || []).map((s) => { const sc = s.score || sectionScore(s); return dom`<tr>
-            <td><strong>${s.label}</strong></td>
-            <td>${sc.good}/${sc.total}</td>
-            <td><ul>${(s.questions || []).map((q) => dom`<li class="${questionGood(q) ? "ok" : "dev"}">${questionGood(q) ? "✓ " : "✗ "}${describeAnswer(q)}${q.note ? dom`<br><em>Notitie: ${q.note}</em>` : ""}</li>`)}</ul></td>
-          </tr>`; })}
-        </tbody>
-      </table>
-      <h2>Aangemaakte taken</h2>
-      ${tasks.length ? dom`<table class="print-table"><thead><tr><th>Taak</th><th>Status nu</th></tr></thead><tbody>${tasks.map((x) => dom`<tr><td>${x.title}</td><td>${x.status === "afgerond" ? "Afgerond" : x.status === "pending" ? "Ter controle" : "Open"}</td></tr>`)}</tbody></table>` : dom`<p>Geen taken.</p>`}
+      <section class="print-page">
+        <header class="print-head">
+          <h1>Audit ${vName}</h1>
+          <p>Zeiklijst · ${formatDate(a.auditDate)}</p>
+        </header>
+        <table class="print-table print-meta">
+          <tbody>
+            <tr><th>Variant</th><td>${vName}</td></tr>
+            <tr><th>Gelopen door</th><td>${a.ranBy || "–"}</td></tr>
+            <tr><th>Datum</th><td>${formatDate(a.auditDate)}</td></tr>
+            <tr><th>Afgerond</th><td>${completed || "–"}</td></tr>
+            <tr><th>Totaalscore</th><td>${t.good}/${t.total} (${pct(t.good, t.total)}%)</td></tr>
+            <tr><th>Taken / notities</th><td>${a.taskCount || 0} taken · ${a.notesCount || 0} notities</td></tr>
+          </tbody>
+        </table>
+        <h2>Onderdelen</h2>
+        <table class="print-table">
+          <thead><tr><th>Onderdeel</th><th>Score</th></tr></thead>
+          <tbody>${(a.sections || []).map((s) => { const sc = scoreOf(s); return dom`<tr><td>${s.label}</td><td>${sc.good}/${sc.total} (${pct(sc.good, sc.total)}%)</td></tr>`; })}</tbody>
+        </table>
+      </section>
+      ${(a.sections || []).map((s) => {
+        const sc = scoreOf(s);
+        const st = tasks.filter((x) => x.source && x.source.locationId === s.locationId);
+        return dom`<section class="print-page">
+          <h2>${s.label} · ${sc.good}/${sc.total} (${pct(sc.good, sc.total)}%)</h2>
+          <table class="print-table">
+            <thead><tr><th>Vraag en antwoord</th><th>Notitie</th></tr></thead>
+            <tbody>${(s.questions || []).map((q) => dom`<tr class="${questionGood(q) ? "ok" : "dev"}"><td>${questionGood(q) ? "✓ " : "✗ "}${describeAnswer(q)}</td><td>${q.note || ""}</td></tr>`)}</tbody>
+          </table>
+          <h3>Taken</h3>
+          ${st.length ? dom`<table class="print-table"><thead><tr><th>Taak</th><th>Voor</th><th>Status nu</th></tr></thead><tbody>${st.map((x) => dom`<tr><td>${x.urgent ? "SPOED · " : ""}${x.title}</td><td>${x.assigneeName || "Allen"}</td><td>${statusText(x)}</td></tr>`)}</tbody></table>` : dom`<p>Geen taken.</p>`}
+        </section>`;
+      })}
+      ${cmp ? dom`<section class="print-page">
+        <h2>Vergelijking met de vorige audits (${vName})</h2>
+        ${prev.length ? dom`<table class="print-table print-compare">
+          <thead><tr><th>Onderdeel</th>${prevHead.map((x) => dom`<th>${x ? formatDate(x.auditDate) : "–"}</th>`)}<th>Deze audit</th><th>Trend</th></tr></thead>
+          <tbody>
+            ${cmp.rows.map((r) => dom`<tr class="${r.declining ? "declining" : ""}"><td>${r.label}</td>${r.pcts.map((v) => dom`<td>${p(v)}</td>`)}<td>${r.declining ? dom`<strong>Structureel dalend</strong>` : ""}</td></tr>`)}
+            <tr class="trend-total ${cmp.total.declining ? "declining" : ""}"><td><strong>Totaal</strong></td>${cmp.total.pcts.map((v) => dom`<td><strong>${p(v)}</strong></td>`)}<td>${cmp.total.declining ? dom`<strong>Structureel dalend</strong>` : ""}</td></tr>
+          </tbody>
+        </table>
+        <p>"Structureel dalend" = twee keer achter elkaar lager dan de audit ervoor.</p>` : dom`<p>Nog geen eerdere audit van deze variant om mee te vergelijken.</p>`}
+      </section>` : ""}
       <p class="print-foot">Made by Jordi-CyX</p>
     </div>`);
   return true;
@@ -1206,8 +1581,13 @@ function renderBeheer() {
       <p class="pin-meta">Taken zonder vaste locatie, gegroepeerd op hun oude vrije tekst. Koppelen zet alleen de vaste locatie; de oude tekst blijft bewaard.</p>
       ${renderLinkLegacy()}
     </div>
+    <div class="emp-dash-card" id="variants-card">
+      <h3>Audit-varianten</h3>
+      <p class="pin-meta">Elke variant heeft een eigen vragenlijst en ronde. Bij Audit lopen kies je de variant. Met Vergelijken aan vergelijkt de PDF met de vorige 2 audits van dezelfde variant; varianten worden nooit met elkaar vergeleken.</p>
+      ${renderVariantsAdmin()}
+    </div>
     <div class="emp-dash-card">
-      <h3>Vragenlijst en ronde</h3>
+      <h3>Vragenlijst en ronde${editVariant() ? ` · ${editVariant().name}` : ""}</h3>
       <p class="pin-meta">De volgorde hieronder is de volgorde van de ronde. Een lopende audit houdt de vragen van het moment van starten. In een taaktekst wordt <code>{locatie}</code> vervangen door de naam van het onderdeel.</p>
       ${renderConfigAdmin()}
     </div>`);
@@ -1290,16 +1670,139 @@ function renderLinkLegacy() {
       </li>`; })}</ul>` : dom`<p class="empty-state">Alle taken zijn gekoppeld.</p>`}`;
 }
 
+function renderVariantsAdmin() {
+  const { dom } = ctx;
+  if (!configReady()) return dom`<p class="pin-meta">Laden…</p>`;
+  const list = variants();
+  const ev = editVariant();
+  const running = activeAuditDoc ? variantIdOf(activeAuditDoc.data) : null;
+  return dom`
+    ${list.length ? dom`<ul class="v2-list variant-list">${list.map((v, i) => dom`<li class="v2-row${v.active ? "" : " inactive"}">
+      <span class="v2-row-main">
+        <strong>${v.name}</strong>
+        <span class="pin-meta">${v.sections.filter((x) => x.active).length} onderdelen · versie ${v.version}</span>
+        <span class="badge ${v.compare ? "" : "paused"}">${v.compare ? "Vergelijken aan" : "Vergelijken uit"}</span>
+        ${v.active ? "" : dom` <span class="badge paused">Niet actief</span>`}
+        ${ev && ev.id === v.id ? dom` <span class="badge">Wordt bewerkt</span>` : ""}
+      </span>
+      <span class="v2-row-actions">
+        <button type="button" class="secondary" data-v-edit="${v.id}" data-disabled="${flag(ev && ev.id === v.id)}">Vragen bewerken</button>
+        <button type="button" class="secondary" data-v-rename="${v.id}">Naam</button>
+        <button type="button" class="secondary" data-v-compare="${v.id}">${v.compare ? "Vergelijken uit" : "Vergelijken aan"}</button>
+        <button type="button" class="secondary" data-v-active="${v.id}">${v.active ? "Deactiveren" : "Activeren"}</button>
+        <button type="button" class="secondary icon-btn" data-v-up="${v.id}" aria-label="${`${v.name} hoger`}" data-disabled="${flag(i === 0)}">↑</button>
+        <button type="button" class="secondary icon-btn" data-v-down="${v.id}" aria-label="${`${v.name} lager`}" data-disabled="${flag(i === list.length - 1)}">↓</button>
+        <button type="button" class="danger" data-v-del="${v.id}" data-disabled="${flag(v.id === DEFAULT_VARIANT_ID || v.virtual || running === v.id)}">Verwijderen</button>
+      </span>
+    </li>`)}</ul>` : ""}
+    <form class="v2-inline-form" data-variant-add novalidate>
+      <label>Nieuwe variant <input type="text" name="name" maxlength="${VARIANT_NAME_MAX}" placeholder="Naam, bijv. Netheid"></label>
+      <label>Begin met
+        <select name="from">
+          <option value="">Lege vragenlijst</option>
+          ${list.map((v) => dom`<option value="${v.id}">Kopie van ${v.name}</option>`)}
+        </select>
+      </label>
+      <label class="check-row"><input type="checkbox" name="compare" data-checked="1"> Vergelijken</label>
+      <button type="submit" data-disabled="${flag(!locationsDoc)}">Variant toevoegen</button>
+    </form>`;
+}
+
+async function addVariant(form) {
+  const f = form.elements;
+  const name = f.name.value.trim().slice(0, VARIANT_NAME_MAX);
+  if (!name) {
+    ctx.showToast("Vul een naam in voor de variant.");
+    return;
+  }
+  const list = variants();
+  if (list.some((v) => v.name.toLowerCase() === name.toLowerCase())) {
+    ctx.showToast("Er is al een variant met die naam.");
+    return;
+  }
+  const from = list.find((v) => v.id === f.from.value);
+  const id = uniqueId(slugify(name, 30), new Set(list.map((v) => v.id)), 30);
+  const order = list.reduce((m, v) => Math.max(m, v.order || 0), 0) + 1;
+  const v = { id, name, compare: f.compare.checked, active: true, order, version: 0, sections: [], virtual: false };
+  const sections = from ? JSON.parse(JSON.stringify(from.sections)) : [];
+  if (await saveVariant(v, { sections, create: true })) {
+    editVariantId = id;
+    localStorage.setItem("zeiklijst-admin-edit-variant", id);
+    form.reset();
+    ctx.showToast(`Variant "${name}" toegevoegd.`, "ok");
+  }
+}
+
+function bindVariants(root) {
+  const on = (sel, key, fn) => root.querySelectorAll(sel).forEach((el) => { el.onclick = () => { const v = variantById(el.dataset[key]); if (v) fn(v, el); }; });
+  const form = root.querySelector("[data-variant-add]");
+  if (form) form.onsubmit = (e) => {
+    e.preventDefault();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    addVariant(form);
+  };
+  on("[data-v-edit]", "vEdit", (v) => {
+    editVariantId = v.id;
+    editingQuestion = null;
+    localStorage.setItem("zeiklijst-admin-edit-variant", v.id);
+    renderBeheer();
+  });
+  on("[data-v-rename]", "vRename", async (v) => {
+    const res = await ctx.showDialog({ title: "Variant hernoemen", message: "Bestaande audits van deze variant tonen de nieuwe naam.", input: true, inputLabel: "Naam", inputValue: v.name, confirmText: "Opslaan" });
+    if (!res || !res.ok) return;
+    const name = String(res.value || "").trim().slice(0, VARIANT_NAME_MAX);
+    if (!name || name === v.name) return;
+    if (variants().some((x) => x.id !== v.id && x.name.toLowerCase() === name.toLowerCase())) {
+      ctx.showToast("Er is al een variant met die naam.");
+      return;
+    }
+    if (await saveVariant(v, { name })) ctx.showToast("Naam opgeslagen.", "ok");
+  });
+  on("[data-v-compare]", "vCompare", async (v) => {
+    if (await saveVariant(v, { compare: !v.compare })) ctx.showToast(`Vergelijken ${v.compare ? "uit" : "aan"} voor ${v.name}.`, "ok");
+  });
+  on("[data-v-active]", "vActive", async (v) => {
+    if (v.active && variants().filter((x) => x.active).length <= 1) {
+      ctx.showToast("Er moet minstens één actieve variant zijn.");
+      return;
+    }
+    if (await saveVariant(v, { active: !v.active })) ctx.showToast(`${v.name} ${v.active ? "gedeactiveerd" : "geactiveerd"}.`, "ok");
+  });
+  const reorder = async (v, d) => {
+    const list = variants();
+    const i = list.findIndex((x) => x.id === v.id);
+    const j = i + d;
+    if (j < 0 || j >= list.length) return;
+    move(list, i, d);
+    // Volgorde opnieuw nummeren; alleen varianten waarvan de volgorde verandert, worden geschreven.
+    for (let k = 0; k < list.length; k += 1) {
+      if (list[k].order !== k + 1 || list[k].virtual) await saveVariant(list[k], { order: k + 1 });
+    }
+  };
+  on("[data-v-up]", "vUp", (v) => reorder(v, -1));
+  on("[data-v-down]", "vDown", (v) => reorder(v, 1));
+  on("[data-v-del]", "vDel", async (v) => {
+    const n = audits.filter((a) => variantIdOf(a) === v.id).length;
+    const ok = await ctx.confirmAction(`Variant "${v.name}" verwijderen?${n ? ` De ${n} bestaande audits blijven bewaard (met hun eigen vragen).` : ""}`, { title: "Variant verwijderen", confirmText: "Verwijderen", danger: true });
+    if (!ok) return;
+    if (await ctx.safeWrite(() => deleteDoc(doc(db, "auditVariants", v.id)))) {
+      if (editVariantId === v.id) editVariantId = "";
+      ctx.showToast("Variant verwijderd.", "ok");
+    }
+  });
+}
+
 function renderConfigAdmin() {
   const { dom } = ctx;
-  if (!auditConfigReady) return dom`<p class="pin-meta">Laden…</p>`;
-  if (!auditConfig) return dom`<button type="button" data-seed-config data-disabled="${flag(!locationsDoc)}">Standaard vragenlijst aanmaken</button>${locationsDoc ? "" : dom`<p class="pin-meta">Maak eerst de locatielijst aan.</p>`}`;
-  const secs = auditConfig.sections;
+  if (!configReady()) return dom`<p class="pin-meta">Laden…</p>`;
+  const ev = editVariant();
+  if (!ev) return dom`<button type="button" data-seed-config data-disabled="${flag(!locationsDoc)}">Standaard vragenlijst aanmaken</button>${locationsDoc ? "" : dom`<p class="pin-meta">Maak eerst de locatielijst aan.</p>`}`;
+  const secs = ev.sections;
   const inRound = new Set(secs.map((s) => s.locationId));
   const addable = activeLocations().filter((l) => !inRound.has(l.id));
   const editing = (si, qi) => editingQuestion && editingQuestion.sectionIndex === si && editingQuestion.questionIndex === qi;
   return dom`
-    <p class="pin-meta">Versie ${auditConfig.version} · ${secs.filter((s) => s.active).length} onderdelen in de ronde</p>
+    <p class="pin-meta">${ev.name} · versie ${ev.version} · ${secs.filter((s) => s.active).length} onderdelen in de ronde</p>
     <ol class="v2-list config-list">
       ${secs.map((s, si) => dom`
         <li class="config-section${s.active ? "" : " inactive"}">
@@ -1426,7 +1929,7 @@ function readQuestionForm(form, section, qi) {
 }
 
 function configCopy() {
-  return JSON.parse(JSON.stringify(auditConfig.sections));
+  return JSON.parse(JSON.stringify(editVariant().sections));
 }
 
 function move(arr, i, d) {
@@ -1526,7 +2029,8 @@ function bindBeheer(root) {
     if (done) ctx.showToast(`${list.length} gekoppeld aan ${locationLabelById(locId)}.`, "ok");
   });
   // Vragenlijst
-  const saveSecs = (secs) => saveConfig(secs, auditConfig.version);
+  const saveSecs = (secs) => saveVariant(editVariant(), { sections: secs });
+  bindVariants(root);
   on("[data-sec-up]", (el) => saveSecs(move(configCopy(), Number(el.dataset.secUp), -1)));
   on("[data-sec-down]", (el) => saveSecs(move(configCopy(), Number(el.dataset.secDown), 1)));
   on("[data-sec-toggle]", (el) => {
@@ -1616,7 +2120,7 @@ function renderDashboardV2() {
   const auditOpen = tasks.filter((t) => t.source && t.source.type === "audit" && t.status === "open");
   const setup = [];
   if (locationsReady && !locationsDoc) setup.push(dom`<button type="button" data-seed-locations>Locatielijst aanmaken</button>`);
-  if (auditConfigReady && !auditConfig && locationsDoc) setup.push(dom`<button type="button" data-seed-config>Vragenlijst aanmaken</button>`);
+  if (configReady() && !variants().length && locationsDoc) setup.push(dom`<button type="button" data-seed-config>Vragenlijst aanmaken</button>`);
   const legacy = legacyPendingTasks().length;
   if (legacy) setup.push(dom`<button type="button" class="secondary" data-goto-data>${legacy} oude afvinkers verplaatsen (Data)</button>`);
   const a = activeAuditDoc;

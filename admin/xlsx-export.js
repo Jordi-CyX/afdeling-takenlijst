@@ -109,7 +109,7 @@ export function buildExportSheets(data, opts = {}) {
 
   const audits = {
     name: "Audits",
-    columns: ["Datum", "Status", "Score (goed)", "Score (totaal)", "Score (%)", "Aantal taken", "Aantal notities", "Notities", "Afgerond op"],
+    columns: ["Datum", "Status", "Score (goed)", "Score (totaal)", "Score (%)", "Aantal taken", "Aantal notities", "Notities", "Afgerond op", "Variant", "Gelopen door"],
     rows: list("audits").map(({ data: a }) => {
       let good = 0;
       let total = 0;
@@ -123,7 +123,9 @@ export function buildExportSheets(data, opts = {}) {
       }
       return [
         nlDate(a.auditDate), a.status === "afgerond" ? "Afgerond" : (a.status === "bezig" ? "Bezig" : a.status || ""),
-        good, total, total ? Math.round((good / total) * 100) : "", Number(a.taskCount) || 0, notes.length, notes.join("\n"), nlDate(a.completedAt)
+        good, total, total ? Math.round((good / total) * 100) : "", Number(a.taskCount) || 0, notes.length, notes.join("\n"), nlDate(a.completedAt),
+        // V3A punt 7: oude audits zonder variant horen bij "Standaard".
+        String(a.variantName || (a.variantId ? a.variantId : "Standaard")), String(a.ranBy || "")
       ];
     })
   };

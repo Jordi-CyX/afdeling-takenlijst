@@ -597,6 +597,45 @@ await t("v3a-herstel", "admin: herstel v2-taak met claim + v25-taak zonder nieuw
   await assertSucceeds(A().doc("tasks/rs-2").set({ title: "V3", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(-1), photos: [], locationId: "pad-16", location: "Pad 16", urgent: false, claimedBy: { employeeId: "emp-aart", name: "Aart" }, claimedAt: TS.now() }));
 });
 
+// --- V3A: audit-varianten en audits verwijderen ---
+const variant = (over = {}) => ({ name: "Standaard", compare: true, active: true, order: 1, version: 1, sections: [{ locationId: "pad-16", active: true, questions: [] }], createdAt: TS.now(), updatedAt: ST(), ...over });
+const vAuditDoc = (over = {}) => ({ status: "afgerond", auditDate: ymd(), startedAt: TS.now(), updatedAt: ST(), sections: [], ...over });
+await t("v3a-variant", "admin: variant aanmaken slaagt", () => assertSucceeds(A().doc("auditVariants/standaard").set(variant())));
+await t("v3a-variant", "admin: variant zonder active/order/createdAt slaagt", () => { const v = variant(); delete v.active; delete v.order; delete v.createdAt; return assertSucceeds(A().doc("auditVariants/netheid").set(v)); });
+await t("v3a-variant", "admin: variant met compare uit slaagt", () => assertSucceeds(A().doc("auditVariants/netheid").set(variant({ name: "Netheid", compare: false }))));
+await t("v3a-variant", "admin: lege naam faalt", () => assertFails(A().doc("auditVariants/x").set(variant({ name: " " }))));
+await t("v3a-variant", "admin: naam > 60 faalt", () => assertFails(A().doc("auditVariants/x").set(variant({ name: "x".repeat(61) }))));
+await t("v3a-variant", "admin: compare geen bool faalt", () => assertFails(A().doc("auditVariants/x").set(variant({ compare: "ja" }))));
+await t("v3a-variant", "admin: version 0 faalt", () => assertFails(A().doc("auditVariants/x").set(variant({ version: 0 }))));
+await t("v3a-variant", "admin: > 50 onderdelen faalt", () => assertFails(A().doc("auditVariants/x").set(variant({ sections: Array(51).fill({ locationId: "a", questions: [] }) }))));
+await t("v3a-variant", "admin: extra veld faalt", () => assertFails(A().doc("auditVariants/x").set(variant({ foto: "x" }))));
+await t("v3a-variant", "admin: updatedAt geen servertijd faalt", () => assertFails(A().doc("auditVariants/x").set(variant({ updatedAt: TS.now() }))));
+await t("v3a-variant", "admin: ongeldig variant-id faalt", () => assertFails(A().doc("auditVariants/met spatie").set(variant())));
+await t("v3a-variant", "admin: variant lezen en verwijderen slaagt", async () => { await seedDoc("auditVariants/oud", { ...variant(), updatedAt: TS.now() }); await assertSucceeds(A().collection("auditVariants").get()); await assertSucceeds(A().doc("auditVariants/oud").delete()); });
+await t("v3a-variant", "medewerker/reader/anoniem: varianten lezen of schrijven faalt", async () => { await seedDoc("auditVariants/standaard", { ...variant(), updatedAt: TS.now() }); await assertFails(S().doc("auditVariants/standaard").get()); await assertFails(RD().collection("auditVariants").get()); await assertFails(anonCtx().doc("auditVariants/standaard").get()); await assertFails(S().doc("auditVariants/x").set(variant())); });
+await t("v3a-variant", "auditConfig/current blijft werken (v2)", () => assertSucceeds(A().doc("auditConfig/current").set({ version: 2, updatedAt: ST(), sections: [] })));
+await t("v3a-audit", "admin: audit met variantId/variantName/compare/ranBy slaagt", () => assertSucceeds(A().doc("audits/a-var").set(vAuditDoc({ variantId: "standaard", variantName: "Standaard", compare: true, ranBy: "Test Anna" }))));
+await t("v3a-audit", "admin: v2-audit zonder variant (oud) slaagt", () => assertSucceeds(A().doc("audits/a-oud").set(vAuditDoc())));
+await t("v3a-audit", "admin: ongeldig variantId faalt", () => assertFails(A().doc("audits/a-x").set(vAuditDoc({ variantId: "met spatie" }))));
+await t("v3a-audit", "admin: ranBy > 60 faalt", () => assertFails(A().doc("audits/a-x").set(vAuditDoc({ ranBy: "x".repeat(61) }))));
+await t("v3a-audit", "admin: compare geen bool faalt", () => assertFails(A().doc("audits/a-x").set(vAuditDoc({ compare: "ja" }))));
+await t("v3a-audit", "admin: gelopen audit + audittaak + taskMeta + completion verwijderen in één batch slaagt", async () => {
+  await seedDoc("tasks/at1", { title: "Audit", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "pending", createdAt: iso(-1), photos: [], source: { type: "audit", auditId: "a1", auditDate: ymd(), locationId: "pad-16", questionId: "q1" } });
+  await seedDoc("taskMeta/at1", { dueDate: ymd(2) });
+  await seedDoc("taskCompletions/at1", { employeeId: "emp-staff", name: "Staff", at: TS.now() });
+  const db = A(); const b = db.batch();
+  b.delete(db.doc("audits/a1")); b.delete(db.doc("tasks/at1")); b.delete(db.doc("taskMeta/at1")); b.delete(db.doc("taskCompletions/at1"));
+  await assertSucceeds(b.commit());
+});
+await t("v3a-audit", "admin: zelfgemaakte audittaak met persoon, spoed en streefdatum slaagt", async () => {
+  const db = A(); const b = db.batch();
+  b.set(db.doc("tasks/audit-a1-pad-16-q1-c1"), { title: "Pad 16 - Lamp vervangen", description: "Audit", assigneeId: "emp-staff", assigneeName: "Staff", status: "open", createdAt: iso(), pendingAt: null, pendingBy: null, completedAt: null, recurringId: null, occurrenceDate: null, photos: [], location: "Pad 16", locationId: "pad-16", urgent: true, source: { type: "audit", auditId: "a1", auditDate: ymd(), locationId: "pad-16", questionId: "q1" } });
+  b.set(db.doc("taskMeta/audit-a1-pad-16-q1-c1"), { dueDate: ymd(3) });
+  await assertSucceeds(b.commit());
+});
+await t("v3a-audit", "medewerker/reader: audit verwijderen faalt", async () => { await assertFails(S().doc("audits/a1").delete()); await assertFails(RD().doc("audits/a1").delete()); });
+await t("v3a-audit", "reader: audit met variant lezen slaagt", async () => { await seedDoc("audits/a-var", { ...vAuditDoc({ variantId: "standaard", ranBy: "X" }), updatedAt: TS.now() }); await assertSucceeds(RD().doc("audits/a-var").get()); });
+
 await env.cleanup();
 for (const r of results) console.log(r.join(" | "));
 const pass = results.filter((r) => r[0] === "PASS").length;

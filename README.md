@@ -98,6 +98,18 @@ Authenticatie:
 - **Streefdatum-tegel**: open + pending taken met een streefdatum vóór vandaag (verstreken) of vandaag t/m over 2 dagen (binnenkort), datum in Europe/Amsterdam (`DUE_SOON_DAYS` in `admin/admin.js`).
 - **Regeltests**: `cd tests && npm test` (poort 8085) of `npm run test:alt` (poort 8086).
 
+## V3A deel 1 (admin v28)
+
+- **Eigen Firebase-app**: de admin zet `self.ZEIKLIJST_FIREBASE_APP = "zla"` (in `admin/version.js`); `firebase-init.js` start dan een benoemde app. De medewerkers-app blijft op `[DEFAULT]`, dus inloggen in de admin raakt de sessie (pincode/startcode) van ZL op hetzelfde toestel niet meer.
+- **Onderhoud**: `settings/maintenance` = `{enabled, message?, updatedAt}` (alleen admin schrijft; iedereen mag dit ene doc lezen). Knop onder *Data*.
+- **Ik pak deze op**: `claimedBy` `{employeeId, name}` + `claimedAt` op de taak. De admin ziet de claim en kan hem weghalen.
+- **Sorteren**: padvolgorde (locatielijst), dan spoed, dan streefdatum. Doorklikken begint altijd met de standaardfilters; balk *Filters actief* met *Wis filters*.
+- **Audit-varianten**: `auditVariants/{id}` = `{name, compare, active, order, version, sections, createdAt?, updatedAt}` (alleen admin). Zolang `auditVariants/standaard` niet bestaat, telt `auditConfig/current` als variant *Standaard*; de eerste wijziging schrijft hem als echte variant. Variant kiezen bij *Audit lopen*, plus *Gelopen door*. Audits krijgen `variantId`, `variantName`, `compare`, `ranBy`; audits zonder `variantId` horen bij *Standaard*. Trend en vergelijking alleen binnen dezelfde variant.
+- **Zelf aanmaken**: bij een afwijking kies je *Standaard taak* of *Zelf aanmaken* (omschrijving, persoon, spoed, streefdatum; geen foto). Meerdere taken per vraag (*Toevoegen en verdergaan* / *Toevoegen en nieuwe taak aanmaken*). Id `audit-{auditId}-{locatie}-{vraag}-c{n}`; de streefdatum staat in `taskMeta`.
+- **PDF**: pagina 1 titel + wie liep, één pagina per onderdeel, laatste pagina de vergelijking met de vorige 2 audits van dezelfde variant (alleen bij *Vergelijken* aan); twee keer achter elkaar lager = **Structureel dalend**.
+- **Audit verwijderen** (historie): eerst de audit, dan per gekoppelde taak bevestigen (taak + `taskMeta` + `taskCompletions`).
+- **Tests**: `cd tests && npm test`, `npm run test:alt`, `npm run test:unit`. Vóór livegang: `node tests/deploy-check.mjs --expect <commit>` (alleen lezen).
+
 ## Technisch
 
 - Statische HTML, CSS en JavaScript, twee PWA's, live via GitHub Pages (repository blijft `afdeling-takenlijst`)

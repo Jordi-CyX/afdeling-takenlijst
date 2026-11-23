@@ -1128,7 +1128,8 @@ function setupUi() {
     renderAll,
     applyTaskMeta,
     getTasks: () => tasks,
-    getRawTasks: () => rawTasks
+    getRawTasks: () => rawTasks,
+    getEmployees: () => activeEmployees()
   });
   initV3a({
     dom,
