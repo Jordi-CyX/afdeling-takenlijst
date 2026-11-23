@@ -636,6 +636,51 @@ await t("v3a-audit", "admin: zelfgemaakte audittaak met persoon, spoed en streef
 await t("v3a-audit", "medewerker/reader: audit verwijderen faalt", async () => { await assertFails(S().doc("audits/a1").delete()); await assertFails(RD().doc("audits/a1").delete()); });
 await t("v3a-audit", "reader: audit met variant lezen slaagt", async () => { await seedDoc("audits/a-var", { ...vAuditDoc({ variantId: "standaard", ranBy: "X" }), updatedAt: TS.now() }); await assertSucceeds(RD().doc("audits/a-var").get()); });
 
+// --- V3B (admin v29): afdelingen per pad (settings/locations.departments) en staffProfiles (afdeling + adminknop) ---
+const locsB = (over = {}) => ({
+  items: [{ id: "bkc", label: "BKC", order: 1, active: true, staffSelectable: true, department: "beide" }, { id: "pad-16", label: "Pad 16", order: 2, active: true, staffSelectable: true, department: "sanitair" }, { id: "pad-19", label: "Pad 19", order: 3, active: true, staffSelectable: true, department: "tegels" }],
+  labels: { bkc: "BKC", "pad-16": "Pad 16", "pad-19": "Pad 19" },
+  departments: { bkc: "beide", "pad-16": "sanitair", "pad-19": "tegels" },
+  updatedAt: ST(), ...over
+});
+const seedLocsB = () => seedDoc("settings/locations", { ...locsB(), updatedAt: TS.now() });
+await t("v3b-afdeling", "admin: locaties met departments + items[].department slaagt", () => assertSucceeds(A().doc("settings/locations").set(locsB())));
+await t("v3b-afdeling", "admin: locaties zonder departments (zoals nu live) slaagt", () => { const d = locsB(); delete d.departments; return assertSucceeds(A().doc("settings/locations").set(d)); });
+await t("v3b-afdeling", "admin: lege departments-map slaagt", () => assertSucceeds(A().doc("settings/locations").set(locsB({ departments: {} }))));
+await t("v3b-afdeling", "admin: onbekende afdeling faalt", () => assertFails(A().doc("settings/locations").set(locsB({ departments: { bkc: "tuin" } }))));
+await t("v3b-afdeling", "admin: afdeling met hoofdletter faalt", () => assertFails(A().doc("settings/locations").set(locsB({ departments: { bkc: "Sanitair" } }))));
+await t("v3b-afdeling", "admin: departments geen map faalt", () => assertFails(A().doc("settings/locations").set(locsB({ departments: ["sanitair"] }))));
+await t("v3b-afdeling", "admin: > 50 departments faalt", () => assertFails(A().doc("settings/locations").set(locsB({ departments: Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`p${i}`, "beide"])) }))));
+await t("v3b-afdeling", "admin: ander extra veld blijft verboden", () => assertFails(A().doc("settings/locations").set(locsB({ afdeling: "x" }))));
+await t("v3b-afdeling", "medewerker: locaties met departments lezen slaagt", async () => { await seedLocsB(); await assertSucceeds(S().doc("settings/locations").get()); });
+await t("v3b-afdeling", "medewerker: departments schrijven faalt", async () => { await seedLocsB(); await assertFails(S().doc("settings/locations").set(locsB())); });
+await t("v3b-afdeling", "medewerker: taak op pad van andere afdeling aanmaken slaagt (alle locaties kiesbaar)", async () => { await seedLocsB(); await assertSucceeds(addTask(S(), staffTask({ location: "Pad 19", locationId: "pad-19" }))); });
+await t("v3b-afdeling", "reader: locaties lezen blijft verboden", async () => { await seedLocsB(); await assertFails(RD().doc("settings/locations").get()); });
+const accessB = (over = {}) => ({ department: "tegels", canAdmin: false, updatedAt: ST(), ...over });
+await t("v3b-profiel", "admin: afdeling + canAdmin slaagt", () => assertSucceeds(A().doc("staffProfiles/emp-staff").set(accessB())));
+await t("v3b-profiel", "admin: alleen afdeling slaagt", () => assertSucceeds(A().doc("staffProfiles/emp-staff").set({ department: "sanitair", updatedAt: ST() })));
+await t("v3b-profiel", "admin: alleen canAdmin slaagt", () => assertSucceeds(A().doc("staffProfiles/emp-staff").set({ canAdmin: true, updatedAt: ST() })));
+await t("v3b-profiel", "admin: alle drie afdelingen slagen", async () => { for (const d of ["sanitair", "tegels", "beide"]) await assertSucceeds(A().doc("staffProfiles/emp-staff").set(accessB({ department: d }))); });
+await t("v3b-profiel", "admin: onbekende afdeling faalt", () => assertFails(A().doc("staffProfiles/emp-staff").set(accessB({ department: "Tuin" }))));
+await t("v3b-profiel", "admin: lege afdeling-tekst faalt (leeg = veld weglaten)", () => assertFails(A().doc("staffProfiles/emp-staff").set(accessB({ department: "" }))));
+await t("v3b-profiel", "admin: canAdmin geen bool faalt", () => assertFails(A().doc("staffProfiles/emp-staff").set(accessB({ canAdmin: "ja" }))));
+await t("v3b-profiel", "admin: extra veld faalt", () => assertFails(A().doc("staffProfiles/emp-staff").set(accessB({ note: "x" }))));
+await t("v3b-profiel", "admin: niet-bestaande medewerker faalt", () => assertFails(A().doc("staffProfiles/emp-niemand").set(accessB())));
+await t("v3b-profiel", "admin: updatedAt geen servertijd faalt", () => assertFails(A().doc("staffProfiles/emp-staff").set(accessB({ updatedAt: TS.now() }))));
+await t("v3b-profiel", "admin: lezen, lijst en verwijderen slaagt", async () => { await seedDoc("staffProfiles/emp-staff", { canAdmin: false, updatedAt: TS.now() }); await assertSucceeds(A().collection("staffProfiles").get()); await assertSucceeds(A().doc("staffProfiles/emp-staff").delete()); });
+await t("v3b-profiel", "medewerker: eigen doc lezen slaagt", async () => { await seedDoc("staffProfiles/emp-staff", { department: "tegels", canAdmin: true, updatedAt: TS.now() }); await assertSucceeds(S().doc("staffProfiles/emp-staff").get()); });
+await t("v3b-profiel", "medewerker: niet-bestaand eigen doc lezen slaagt (geen afdeling = alles zien)", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("staffProfiles/emp-staff").delete()); await assertSucceeds(S().doc("staffProfiles/emp-staff").get()); });
+await t("v3b-profiel", "medewerker: doc van collega lezen faalt", async () => { await seedDoc("staffProfiles/emp-aart", { canAdmin: false, updatedAt: TS.now() }); await assertFails(S().doc("staffProfiles/emp-aart").get()); });
+await t("v3b-profiel", "medewerker: lijst faalt", () => assertFails(S().collection("staffProfiles").get()));
+await t("v3b-profiel", "medewerker: eigen doc schrijven (zichzelf admin maken) faalt", () => assertFails(S().doc("staffProfiles/emp-staff").set(accessB({ canAdmin: true }))));
+await t("v3b-profiel", "medewerker: eigen doc verwijderen faalt", async () => { await seedDoc("staffProfiles/emp-staff", { canAdmin: true, updatedAt: TS.now() }); await assertFails(S().doc("staffProfiles/emp-staff").delete()); });
+await t("v3b-profiel", "oude-methode-account (zonder startcode): lezen faalt", () => assertFails(staffCtx("u-legacy").doc("staffProfiles/emp-staff").get()));
+await t("v3b-profiel", "inactieve medewerker: eigen doc lezen faalt", async () => { await seedDoc("staffProfiles/emp-inact", { department: "tegels", updatedAt: TS.now() }); await assertFails(staffCtx("u-inact").doc("staffProfiles/emp-inact").get()); });
+await t("v3b-profiel", "reader en anoniem: lezen faalt (ook lijst)", async () => { await seedDoc("staffProfiles/emp-staff", { canAdmin: false, updatedAt: TS.now() }); await assertFails(RD().doc("staffProfiles/emp-staff").get()); await assertFails(RD().collection("staffProfiles").get()); await assertFails(anonCtx().doc("staffProfiles/emp-staff").get()); });
+await t("v3b-profiel", "canAdmin geeft geen adminrechten (medewerker met canAdmin leest geen taskMeta / schrijft geen locaties)", async () => { await seedDoc("staffProfiles/emp-staff", { canAdmin: true, updatedAt: TS.now() }); await assertFails(S().doc("taskMeta/t1").get()); await assertFails(S().doc("settings/locations").set(locsB())); await assertFails(S().collection("employees").get()); });
+await t("v3b-profiel", "employees blijft zonder afdeling/canAdmin: reader ziet geen afdeling", async () => { let d; await env.withSecurityRulesDisabled(async (c) => { d = (await c.firestore().doc("employees/emp-staff").get()).data(); }); if ("department" in d || "canAdmin" in d) throw new Error("employees bevat afdeling/canAdmin"); });
+await t("v3b-sessies", "staffSessions blijft dicht (sessies uit)", async () => { await assertFails(S().doc("staffSessions/sessStaff000000001").set({ employeeId: "emp-staff", uid: "u-staff", device: "x", createdAt: ST(), lastActive: ST(), revoked: false })); });
+
 await env.cleanup();
 for (const r of results) console.log(r.join(" | "));
 const pass = results.filter((r) => r[0] === "PASS").length;
