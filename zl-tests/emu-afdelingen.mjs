@@ -60,9 +60,9 @@ await p.waitForSelector('.task-item[data-task-id="tS"]', { timeout: 15000 });
 // v3b: profiel in staffProfiles/{employeeId} (alleen admin schrijft; hier met regels uit gezet).
 const setAcc = (fields) => admin(async (db) => {
   const ref = db.doc("staffProfiles/emp-test");
-  if (Object.keys(fields).length) await ref.set(fields); else await ref.delete();
+  if (Object.keys(fields).length) await ref.set({ ...fields, updatedAt: Timestamp.now() }); else await ref.delete();
 });
-await admin((db) => db.doc("staffProfiles/emp-ander").set({ department: "tegels", canAdmin: true }));
+await admin((db) => db.doc("staffProfiles/emp-ander").set({ department: "tegels", canAdmin: true, updatedAt: Timestamp.now() }));
 const visible = () => p.evaluate(() => [...document.querySelectorAll(".task-item")].map((e) => e.dataset.taskId).sort().join(","));
 const menuSwitch = async () => { await p.click("#header-more-btn"); const v = await p.isVisible("#admin-switch-btn"); const href = await p.getAttribute("#admin-switch-btn", "href"); await p.keyboard.press("Escape"); return v ? href : false; };
 const settle = () => p.waitForTimeout(1200);
