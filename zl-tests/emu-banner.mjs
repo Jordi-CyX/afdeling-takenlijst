@@ -69,15 +69,25 @@ const check = () => p.evaluate(() => {
     beheerNaam: document.getElementById("admin-switch-btn").textContent.trim(),
     pageOverloop: document.documentElement.scrollWidth > window.innerWidth,
     headerOverloop: header.scrollWidth > header.clientWidth,
-    menuHeeftLogoutOfBeheer: !!document.querySelector("#header-more-menu #logout-btn, #header-more-menu #admin-switch-btn")
+    menuHeeftLogoutOfBeheer: !!document.querySelector("#header-more-menu #logout-btn, #header-more-menu #admin-switch-btn"),
+    volgorde: [...document.querySelectorAll(".header-actions > *")].filter(vis).map((e) => e.id || e.className.split(" ")[0]).join(" > "),
+    iconenZonderLabelOfTitle: [...document.querySelectorAll("header button, header a")].filter(vis).filter((e) => !e.getAttribute("aria-label") || !e.getAttribute("title")).map((e) => e.id)
   };
 });
+const menuCheck = async () => {
+  await p.click("#header-more-btn");
+  const r = await p.evaluate(() => { const m = document.getElementById("header-more-menu"); const b = m.getBoundingClientRect(); return { open: !m.classList.contains("hidden"), left: Math.round(b.left), right: Math.round(b.right), binnenBeeld: b.left >= 0 && b.right <= window.innerWidth && b.bottom <= window.innerHeight }; });
+  await p.keyboard.press("Escape");
+  return r;
+};
 for (const [w, h] of [[360, 740], [1280, 800]]) {
   await p.setViewportSize({ width: w, height: h });
   await setProfile({}); await settle();
   R[`w${w}_canAdminUit`] = await check();
+  R[`w${w}_menuZonderBeheer`] = await menuCheck();
   await setProfile({ canAdmin: true }); await settle();
   R[`w${w}_canAdminAan`] = await check();
+  R[`w${w}_menu`] = await menuCheck();
   await p.screenshot({ path: `/workspace/zl-v3c-banner-${w}.png`, clip: { x: 0, y: 0, width: w, height: 220 } });
 }
 await admin((db) => db.doc("settings/maintenance").set({ enabled: true, message: "Test", updatedAt: Timestamp.now() }));

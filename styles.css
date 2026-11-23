@@ -1524,3 +1524,16 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 @media (max-width: 480px) {
   .guest-app .header-user { display: none; }
 }
+
+/* v3c: ⋮ staat nu vóór Naar beheer/Uitloggen (Uitloggen helemaal rechts, gelijk met ZLA).
+   Menu klapt vanaf de linkerkant van ⋮ uit; op smal scherm uitgelijnd aan de rechterrand van de banner. */
+.guest-app .header-more-menu { left: 0; right: auto; }
+@media (max-width: 599px) {
+  .guest-app .header-more { position: static; }
+  .guest-app .header-more-menu {
+    left: auto;
+    right: calc(0.75rem + var(--safe-right));
+    top: calc(100% + 3px);
+    max-width: calc(100vw - 1.5rem);
+  }
+}
