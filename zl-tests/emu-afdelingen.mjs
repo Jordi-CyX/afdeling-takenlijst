@@ -6,7 +6,7 @@ const require = createRequire("/workspace/zl-v3b/tests/package.json");
 const { initializeTestEnvironment } = require("@firebase/rules-unit-testing");
 const { Timestamp } = require("firebase/firestore");
 const ROOT = "/workspace/zl-v3b";
-const env = await initializeTestEnvironment({ projectId: "zeiklijst-live", firestore: { host: "127.0.0.1", port: 8086, rules: fs.readFileSync(ROOT + "/firestore.rules", "utf8") } });
+const env = await initializeTestEnvironment({ projectId: "zeiklijst-live", firestore: { host: "127.0.0.1", port: 8096, rules: fs.readFileSync(process.env.ZL_RULES || ROOT + "/firestore.rules", "utf8") } });
 const admin = (fn) => env.withSecurityRulesDisabled((c) => fn(c.firestore()));
 const now = Timestamp.now();
 const future = Timestamp.fromMillis(Date.now() + 86400000);
@@ -32,7 +32,7 @@ await admin(async (db) => {
 const initSrc = fs.readFileSync(ROOT + "/firebase-init.js", "utf8") + `
 import { connectFirestoreEmulator as __cfe } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { connectAuthEmulator as __cae } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
-__cfe(db, "127.0.0.1", 8086); __cae(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+__cfe(db, "127.0.0.1", 8096); __cae(auth, "http://127.0.0.1:9199", { disableWarnings: true });
 `;
 const html = fs.readFileSync(ROOT + "/index.html", "utf8").replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, "");
 const b = await chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,BlockInsecurePrivateNetworkRequests"] });
@@ -57,9 +57,12 @@ await p.click("#staff-pin-setup-form button[type=submit]");
 await p.waitForSelector("body:not(.is-locked)", { timeout: 20000 });
 await p.click('#filter-chips [data-filter="all"]');
 await p.waitForSelector('.task-item[data-task-id="tS"]', { timeout: 15000 });
-let accPath = "";
-await admin(async (db) => { const q = await db.collection("staffAccounts").where("employeeId", "==", "emp-test").get(); accPath = q.docs[0].ref.path; });
-const setAcc = (fields) => admin(async (db) => { const ref = db.doc(accPath); const cur = (await ref.get()).data(); const next = { employeeId: cur.employeeId, pinVersion: cur.pinVersion, startCode: cur.startCode, ...fields }; await ref.set(next); });
+// v3b: profiel in staffProfiles/{employeeId} (alleen admin schrijft; hier met regels uit gezet).
+const setAcc = (fields) => admin(async (db) => {
+  const ref = db.doc("staffProfiles/emp-test");
+  if (Object.keys(fields).length) await ref.set(fields); else await ref.delete();
+});
+await admin((db) => db.doc("staffProfiles/emp-ander").set({ department: "tegels", canAdmin: true }));
 const visible = () => p.evaluate(() => [...document.querySelectorAll(".task-item")].map((e) => e.dataset.taskId).sort().join(","));
 const menuSwitch = async () => { await p.click("#header-more-btn"); const v = await p.isVisible("#admin-switch-btn"); const href = await p.getAttribute("#admin-switch-btn", "href"); await p.keyboard.press("Escape"); return v ? href : false; };
 const settle = () => p.waitForTimeout(1200);
@@ -82,6 +85,16 @@ await setAcc({ department: "tegels", canAdmin: false }); await settle();
 R.canAdminUit = await menuSwitch();
 await setAcc({}); await settle();
 R.veldenWeer_weg = await visible();
+R.profielAnderLezen = await p.evaluate(async () => {
+  const { db } = await import("./firebase-init.js");
+  const fs = await import("https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js");
+  try { await fs.getDocFromServer(fs.doc(db, "staffProfiles", "emp-ander")); return "GELEZEN (fout!)"; } catch (e) { return e.code || String(e); }
+});
+R.profielEigenLezen = await p.evaluate(async () => {
+  const { db } = await import("./firebase-init.js");
+  const fs = await import("https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js");
+  try { await fs.getDocFromServer(fs.doc(db, "staffProfiles", "emp-test")); return "ok"; } catch (e) { return e.code || String(e); }
+});
 R.pageErrors = errors;
 console.log(JSON.stringify(R, null, 1));
 await b.close();

@@ -29,10 +29,11 @@ import { sortTasks, isVisibleForDepartment, locationDepartment, normalizeDepartm
 const FEATURES = Object.freeze({ departments: true, sessions: false, adminSwitch: true });
 
 // v3b: ENIGE plek waar staat waar afdeling en canAdmin van de medewerker vandaan komen.
-// Aanname (ZLA, 23-11 10:37): staffAccounts/{uid}, alleen zelf te lezen. Definitief: zla-v3b-data-afspraak.md.
+// Afgesproken met ZLA (23-11 10:40): staffProfiles/{employeeId} = {department, canAdmin}, alleen admin schrijft,
+// medewerker leest alleen het eigen doc. Ontbreekt/geweigerd = ziet alles, geen knop.
 const PROFILE_SOURCE = Object.freeze({
-  path: (staff, uid) => (uid ? ["staffAccounts", uid] : null),
-  department: "department", // "sanitair" | "tegels" | "beide" | leeg/ontbrekend = ziet alles
+  path: (staff) => (staff && staff.employeeId ? ["staffProfiles", staff.employeeId] : null),
+  department: "department", // "sanitair" | "tegels" | "beide"; leeg/ontbrekend/anders = ziet alles
   canAdmin: "canAdmin"      // true = schakelknop naar ZLA
 });
 
@@ -519,8 +520,7 @@ function applyProfile(data) {
 
 function startProfileListener(staff) {
   if (!FEATURES.departments && !FEATURES.adminSwitch) return;
-  const uid = auth.currentUser && auth.currentUser.uid;
-  const path = PROFILE_SOURCE.path(staff, uid);
+  const path = PROFILE_SOURCE.path(staff);
   if (!path) return;
   unsubscribers.push(onSnapshot(doc(db, ...path), (snap) => {
     applyProfile(snap.exists() ? snap.data() : null);
