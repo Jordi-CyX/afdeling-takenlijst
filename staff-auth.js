@@ -25,8 +25,8 @@ import {
   formatStartCode,
   isValidStartCode,
   normalizeName
-} from "./shared.js?v=21";
-import { sendResetRequest } from "./limits.js?v=21";
+} from "./shared.js?v=22";
+import { sendResetRequest } from "./limits.js?v=22";
 
 // Login model: ZLA contract zla-step3-status.md (audit H1/M1/M2).
 // - Claim (first time, new device, after reset): ONLY the start code.

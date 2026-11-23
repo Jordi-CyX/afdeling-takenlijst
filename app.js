@@ -13,7 +13,7 @@ import {
   normalizeName,
   compressImage,
   isSafeImageDataUrl
-} from "./shared.js?v=21";
+} from "./shared.js?v=22";
 import { serverTimestamp, onSnapshot, deleteField, query, where, getDoc, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { auth } from "./firebase-init.js";
 import {
@@ -21,13 +21,21 @@ import {
   initStaffAuth,
   logoutStaff,
   setStaffDisplayName
-} from "./staff-auth.js?v=21";
-import { sendWithStaffCounter } from "./limits.js?v=21";
-import { sortTasks, isVisibleForDepartment, locationDepartment, normalizeDepartment } from "./task-order.js?v=21";
+} from "./staff-auth.js?v=22";
+import { sendWithStaffCounter } from "./limits.js?v=22";
+import { sortTasks, isVisibleForDepartment, locationDepartment, normalizeDepartment } from "./task-order.js?v=22";
 
-// v3a herziene scope (23-11 08:01): afdelingen, sessies en schakelknop NIET in v3a.
-// De code blijft staan voor later; met false gebeurt er niets van (geen UI, geen reads/writes/listeners).
-const FEATURES = Object.freeze({ departments: false, sessions: false, adminSwitch: false });
+// v3b: afdelingen en schakelknop aan; sessies blijven uit (geen reads/writes/listeners naar staffSessions).
+const FEATURES = Object.freeze({ departments: true, sessions: false, adminSwitch: true });
+
+// v3b: ENIGE plek waar staat waar afdeling en canAdmin van de medewerker vandaan komen.
+// Afgesproken met ZLA (23-11 10:40): staffProfiles/{employeeId} = {department, canAdmin}, alleen admin schrijft,
+// medewerker leest alleen het eigen doc. Ontbreekt/geweigerd = ziet alles, geen knop.
+const PROFILE_SOURCE = Object.freeze({
+  path: (staff) => (staff && staff.employeeId ? ["staffProfiles", staff.employeeId] : null),
+  department: "department", // "sanitair" | "tegels" | "beide"; leeg/ontbrekend/anders = ziet alles
+  canAdmin: "canAdmin"      // true = schakelknop naar ZLA
+});
 
 let tasks = [];
 let templates = [];
@@ -95,7 +103,7 @@ const REPORT = {
 };
 
 function appVersion() {
-  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v21";
+  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v22";
 }
 
 // Visible label from the cache name, e.g. "zeiklijst-v20" -> "v20".
@@ -461,7 +469,6 @@ function startListeners() {
       }
       const mine = normalizeEmployee(snap.id, snap.data());
       ownEmployee = mine;
-      if (FEATURES.departments || FEATURES.adminSwitch) applyProfile(snap.data() || {});
       if (mine.active === false) {
         onListenerError(
           { code: "permission-denied" },
@@ -472,6 +479,7 @@ function startListeners() {
       if (mine.name) setStaffDisplayName(mine.name);
       if (currentTaskId) openTask(currentTaskId);
     }, onListenerError));
+    startProfileListener(staff);
   }
 }
 
@@ -480,7 +488,6 @@ function stopListeners() {
   locationSettings = null;
   locationsLoaded = false;
   ownProfile = { department: "", canAdmin: false };
-  profileFallbackTried = false;
   renderAdminSwitch();
   unsubscribers.forEach((stop) => {
     try {
@@ -496,33 +503,31 @@ function stopListeners() {
   ownEmployee = null;
 }
 
-// --- v3a: profiel (afdeling, canAdmin) -------------------------------------
-// Plek volgens afstemming met ZLA: employees/{id}.department/canAdmin; fallback eigen staffAccounts/{uid}.
-let profileFallbackTried = false;
-
+// --- v3b: profiel (afdeling, canAdmin) uit PROFILE_SOURCE --------------------
+// Live meeluisteren, zodat een wijziging in ZLA direct doorwerkt. Geweigerd of ontbrekend
+// = geen afdeling (ziet alles) en geen knop; nooit uitloggen hierom.
 function applyProfile(data) {
-  const hasDept = data && Object.prototype.hasOwnProperty.call(data, "department");
-  const hasAdmin = data && Object.prototype.hasOwnProperty.call(data, "canAdmin");
+  const d = data || {};
   ownProfile = {
-    department: hasDept ? normalizeDepartment(data.department) : ownProfile.department,
-    canAdmin: hasAdmin ? data.canAdmin === true : ownProfile.canAdmin
+    department: normalizeDepartment(d[PROFILE_SOURCE.department]),
+    canAdmin: d[PROFILE_SOURCE.canAdmin] === true
   };
   renderAdminSwitch();
   fillLocationFilter();
   renderTasks();
-  if ((!hasDept || !hasAdmin) && !profileFallbackTried) {
-    profileFallbackTried = true;
-    const uid = auth.currentUser && auth.currentUser.uid;
-    if (!uid) return;
-    getDoc(doc(db, "staffAccounts", uid)).then((snap) => {
-      const acc = snap.exists() ? (snap.data() || {}) : {};
-      if (!hasDept && "department" in acc) ownProfile.department = normalizeDepartment(acc.department);
-      if (!hasAdmin && "canAdmin" in acc) ownProfile.canAdmin = acc.canAdmin === true;
-      renderAdminSwitch();
-      fillLocationFilter();
-      renderTasks();
-    }).catch(() => {});
-  }
+  if (currentTaskId) openTask(currentTaskId);
+}
+
+function startProfileListener(staff) {
+  if (!FEATURES.departments && !FEATURES.adminSwitch) return;
+  const path = PROFILE_SOURCE.path(staff);
+  if (!path) return;
+  unsubscribers.push(onSnapshot(doc(db, ...path), (snap) => {
+    applyProfile(snap.exists() ? snap.data() : null);
+  }, (err) => {
+    console.warn("Profiel (afdeling/canAdmin) niet leesbaar; alles zichtbaar, geen schakelknop.", err && err.code);
+    applyProfile(null);
+  }));
 }
 
 function renderAdminSwitch() {

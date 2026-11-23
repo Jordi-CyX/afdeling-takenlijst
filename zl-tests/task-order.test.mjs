@@ -46,4 +46,17 @@ t("zichtbaarheid volgens punt 3", () => {
   assert.equal(isVisibleForDepartment({ locationId: "bkc" }, "tegels", me, settings), true, "pad beide");
 });
 
+t("v3b: extra afdelingsgevallen", () => {
+  const me = "emp1";
+  const sanTaak = { locationId: "p14", assigneeId: "ALLEN" };
+  assert.equal(isVisibleForDepartment(sanTaak, "tegels", me, settings), false, "tegels ziet geen sanitair-taak voor Allen");
+  assert.equal(isVisibleForDepartment({ locationId: "p14", assigneeId: "ander" }, "tegels", me, settings), false, "ook niet persoonlijk van een ander");
+  assert.equal(isVisibleForDepartment({ locationId: "p14", assigneeId: me }, "tegels", me, settings), true, "eigen taak andere afdeling");
+  assert.equal(isVisibleForDepartment(sanTaak, "Sanitair", me, settings), true, "hoofdletters");
+  assert.equal(isVisibleForDepartment(sanTaak, "onzin", me, settings), true, "ongeldige waarde = geen afdeling");
+  assert.equal(isVisibleForDepartment({ locationId: "p15" }, "tegels", me, settings), false, "afdeling via departments-map");
+  assert.equal(isVisibleForDepartment({ locationId: "nieuw" }, "tegels", me, settings), true, "pad zonder afdeling");
+  assert.equal(isVisibleForDepartment({ locationId: "p19" }, "tegels", me, null), true, "geen locatielijst");
+});
+
 console.log(`${passed} geslaagd, 0 gefaald`);
