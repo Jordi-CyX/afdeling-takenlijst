@@ -25,6 +25,10 @@ import {
 import { sendWithStaffCounter } from "./limits.js?v=21";
 import { sortTasks, isVisibleForDepartment, locationDepartment, normalizeDepartment } from "./task-order.js?v=21";
 
+// v3a herziene scope (23-11 08:01): afdelingen, sessies en schakelknop NIET in v3a.
+// De code blijft staan voor later; met false gebeurt er niets van (geen UI, geen reads/writes/listeners).
+const FEATURES = Object.freeze({ departments: false, sessions: false, adminSwitch: false });
+
 let tasks = [];
 let templates = [];
 // L3: only the signed-in employee's own employees/{id} doc is read, never the list.
@@ -141,6 +145,7 @@ function claimLabel(task) {
 }
 
 function visibleForMe(task) {
+  if (!FEATURES.departments) return true;
   const staff = getCurrentStaff();
   return isVisibleForDepartment(task, ownProfile.department, staff && staff.employeeId, locationSettings);
 }
@@ -457,7 +462,7 @@ function startListeners() {
       }
       const mine = normalizeEmployee(snap.id, snap.data());
       ownEmployee = mine;
-      applyProfile(snap.data() || {});
+      if (FEATURES.departments || FEATURES.adminSwitch) applyProfile(snap.data() || {});
       if (mine.active === false) {
         onListenerError(
           { code: "permission-denied" },
@@ -524,7 +529,7 @@ function applyProfile(data) {
 function renderAdminSwitch() {
   const link = document.getElementById("admin-switch-btn");
   if (!link) return;
-  const show = Boolean(getCurrentStaff()) && ownProfile.canAdmin === true;
+  const show = FEATURES.adminSwitch && Boolean(getCurrentStaff()) && ownProfile.canAdmin === true;
   link.classList.toggle("hidden", !show);
   link.hidden = !show;
 }
@@ -570,6 +575,7 @@ function shortDevice() {
 }
 
 async function startSession(staff) {
+  if (!FEATURES.sessions) return;
   const uid = auth.currentUser && auth.currentUser.uid;
   if (!uid || !staff || !staff.employeeId) return;
   stopSession();
@@ -803,7 +809,7 @@ function fillLocationFilter() {
     sel.append(option);
   };
   add("all", "Alle");
-  const dept = ownProfile.department;
+  const dept = FEATURES.departments ? ownProfile.department : "";
   const deptOk = (id) => !dept || dept === "beide" || !locationDepartment(id, locationSettings)
     || locationDepartment(id, locationSettings) === "beide" || locationDepartment(id, locationSettings) === dept;
   const openIds = new Set(tasks.filter((t) => t.status !== "afgerond" && t.locationId && visibleForMe(t)).map((t) => t.locationId));
