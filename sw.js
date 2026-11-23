@@ -1,6 +1,6 @@
 // Versioned URL so an HTTP-cached app-version.js can never give a new worker the old cache name.
-importScripts("./app-version.js?v=20");
-const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v20";
+importScripts("./app-version.js?v=21");
+const CACHE_NAME = self.APP_CACHE_NAME || "zeiklijst-v21";
 const FIREBASE_SDK = "12.6.0";
 const ASSETS = [
   "./",
@@ -8,6 +8,7 @@ const ASSETS = [
   "./styles.css",
   "./app.js",
   "./app-version.js",
+  "./task-order.js",
   "./staff-auth.js",
   "./limits.js",
   "./shared.js",

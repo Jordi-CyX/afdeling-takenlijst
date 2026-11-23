@@ -29,11 +29,11 @@
   }
 }
   </script>
-  <link rel="manifest" href="manifest.webmanifest?v=20">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=20">
-  <link rel="icon" href="favicon.ico?v=20" sizes="any">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20">
-  <link rel="stylesheet" href="styles.css?v=20">
+  <link rel="manifest" href="manifest.webmanifest?v=21">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=21">
+  <link rel="icon" href="favicon.ico?v=21" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=21">
+  <link rel="stylesheet" href="styles.css?v=21">
 </head>
 <body class="guest-app is-locked">
   <header>
@@ -55,6 +55,7 @@
           </button>
           <div id="header-more-menu" class="header-more-menu hidden" role="menu">
             <p id="menu-user" class="menu-user hidden"></p>
+            <a id="admin-switch-btn" class="menu-action hidden" role="menuitem" href="./admin/">Naar beheer (ZLA)</a>
             <button type="button" id="report-menu-btn" class="menu-action hidden" role="menuitem">Fout melden</button>
             <button type="button" id="logout-menu-btn" class="menu-action hidden" role="menuitem">Uitloggen</button>
             <p class="made-by">Made by Jordi-CyX</p>
@@ -66,11 +67,24 @@
 
   <button type="button" id="update-banner" class="update-banner hidden">Nieuwe versie, tik om te verversen</button>
 
+  <div id="maintenance-screen" class="maintenance-screen hidden" role="alert" aria-live="assertive">
+    <div class="login-screen-card staff-login-card maintenance-card">
+      <img src="logo.png?v=21" alt="" class="maintenance-logo" width="120" height="120">
+      <h2>Zeiklijst is even in onderhoud</h2>
+      <p id="maintenance-message" class="maintenance-message">Probeer het straks opnieuw.</p>
+      <p class="made-by">Made by Jordi-CyX</p>
+    </div>
+  </div>
+
   <div id="staff-login" class="staff-login">
     <div class="login-screen-card staff-login-card">
+      <div id="staff-login-tabs" class="login-tabs hidden" role="tablist" aria-label="Inloggen of registreren">
+        <button type="button" id="staff-tab-login" class="login-tab is-active" role="tab" aria-selected="true" aria-controls="staff-pin-form">Inloggen</button>
+        <button type="button" id="staff-tab-register" class="login-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="staff-code-form">Registreren</button>
+      </div>
       <form id="staff-code-form" class="hidden">
-        <h2>Startcode invoeren</h2>
-        <p class="staff-login-hint">Vul de startcode in die je van je leidinggevende hebt gekregen.</p>
+        <h2>Registreren</h2>
+        <p class="staff-login-hint">Eerste keer op dit toestel, of een nieuwe pincode nodig? Vul de startcode in die je van je leidinggevende hebt gekregen.</p>
         <label>
           Startcode
           <input type="text" id="staff-code-input" class="code-input" name="start-code" placeholder="XXXXX-XXXXX" maxlength="11" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" required>
@@ -81,7 +95,6 @@
           <button type="submit">Verder</button>
         </div>
         <button type="button" class="text-btn" id="staff-code-forgot">Geen startcode of pincode vergeten?</button>
-        <button type="button" class="text-btn hidden" id="staff-code-back">Terug naar inloggen met pincode</button>
       </form>
 
       <form id="staff-pin-setup-form" class="hidden">
@@ -105,8 +118,11 @@
 
       <form id="staff-pin-form" class="hidden">
         <h2>Inloggen</h2>
-        <p class="staff-login-hint" id="staff-pin-hello">Vul je pincode in.</p>
-        <input type="text" id="staff-pin-username" name="username" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true">
+        <p class="staff-login-hint" id="staff-pin-hello">Vul je naam en pincode in.</p>
+        <label>
+          Naam
+          <input type="text" id="staff-pin-name" name="username" maxlength="60" autocomplete="username" autocapitalize="words" spellcheck="false" required>
+        </label>
         <label>
           Pincode
           <input type="password" id="staff-pin-input" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="current-password" required>
@@ -117,7 +133,6 @@
           <button type="submit">Inloggen</button>
         </div>
         <button type="button" class="secondary" id="staff-pin-forgot">Pincode vergeten</button>
-        <button type="button" class="text-btn" id="staff-pin-other">Andere startcode gebruiken / andere medewerker op dit toestel</button>
       </form>
 
       <form id="staff-reset-form" class="hidden">
@@ -271,7 +286,7 @@
 
   <div id="app-version-label" class="app-version-label" title="App-versie" hidden></div>
 
-  <script src="app-version.js?v=20"></script>
-  <script type="module" src="app.js?v=20"></script>
+  <script src="app-version.js?v=21"></script>
+  <script type="module" src="app.js?v=21"></script>
 </body>
 </html>

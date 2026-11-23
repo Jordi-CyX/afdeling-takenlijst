@@ -13,20 +13,25 @@ import {
   normalizeName,
   compressImage,
   isSafeImageDataUrl
-} from "./shared.js";
-import { serverTimestamp, onSnapshot, deleteField, query, where } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+} from "./shared.js?v=21";
+import { serverTimestamp, onSnapshot, deleteField, query, where, getDoc, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+import { auth } from "./firebase-init.js";
 import {
   getCurrentStaff,
   initStaffAuth,
   logoutStaff,
   setStaffDisplayName
-} from "./staff-auth.js";
-import { sendWithStaffCounter } from "./limits.js";
+} from "./staff-auth.js?v=21";
+import { sendWithStaffCounter } from "./limits.js?v=21";
+import { sortTasks, isVisibleForDepartment, locationDepartment, normalizeDepartment } from "./task-order.js?v=21";
 
 let tasks = [];
 let templates = [];
 // L3: only the signed-in employee's own employees/{id} doc is read, never the list.
 let ownEmployee = null;
+// v3a: eigen afdeling en adminrecht (nooit in beeld voor de medewerker).
+let ownProfile = { department: "", canAdmin: false };
+let locationsLoaded = false;
 let locationSettings = null;
 let ownCompletions = {};
 let currentTaskId = null;
@@ -86,7 +91,7 @@ const REPORT = {
 };
 
 function appVersion() {
-  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v20";
+  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v21";
 }
 
 // Visible label from the cache name, e.g. "zeiklijst-v20" -> "v20".
@@ -114,7 +119,30 @@ function enrichTask(id, data) {
     ? d.source
     : (task.source && typeof task.source === "object" ? task.source : null);
   task.source = source;
+  // v3a "Ik pak deze op": claimedBy {employeeId, name} + claimedAt.
+  const cb = d.claimedBy && typeof d.claimedBy === "object" ? d.claimedBy : null;
+  task.claimedBy = cb && typeof cb.employeeId === "string" && cb.employeeId
+    ? { employeeId: cb.employeeId, name: String(cb.name || "").trim().slice(0, 60) }
+    : null;
+  task.claimedAt = d.claimedAt || null;
+  if (typeof d.dueDate === "string" && !task.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(d.dueDate.trim())) task.dueDate = d.dueDate.trim();
   return task;
+}
+
+function isClaimedByMe(task) {
+  const staff = getCurrentStaff();
+  return Boolean(staff && task && task.claimedBy && task.claimedBy.employeeId === staff.employeeId);
+}
+
+function claimLabel(task) {
+  if (!task || !task.claimedBy) return "";
+  if (isClaimedByMe(task)) return "Opgepakt door jou";
+  return `Opgepakt door ${task.claimedBy.name || "een collega"}`;
+}
+
+function visibleForMe(task) {
+  const staff = getCurrentStaff();
+  return isVisibleForDepartment(task, ownProfile.department, staff && staff.employeeId, locationSettings);
 }
 
 function locationItems() {
@@ -206,6 +234,14 @@ function currentLocationFilter() {
 function setLocationFilter(value) {
   localStorage.setItem(LOCATION_FILTER_KEY, value || "all");
   renderTasks();
+}
+
+let lastFilterKey = "";
+function refreshLocationFilterIfNeeded() {
+  const key = tasks.filter((t) => t.status !== "afgerond").map((t) => t.locationId || "").sort().join("|");
+  if (key === lastFilterKey) return;
+  lastFilterKey = key;
+  fillLocationFilter();
 }
 
 function matchesLocationFilter(task, locFilter) {
@@ -350,7 +386,12 @@ let accessLostHandled = false;
 function onListenerError(err, message) {
   if (!isPermissionDenied(err) || accessLostHandled) return;
   accessLostHandled = true;
-  logoutStaff(message || "Je hebt geen toegang meer. Log opnieuw in of neem contact op met je leidinggevende.");
+  if (message) {
+    logoutStaff(message);
+    return;
+  }
+  // B7: na een pincode-reset helpt opnieuw inloggen niet; direct naar Registreren.
+  logoutStaff("Je pincode is gereset of je toegang is veranderd. Vraag je leidinggevende om een nieuwe startcode.", { step: "code" });
 }
 
 function startListeners() {
@@ -359,6 +400,7 @@ function startListeners() {
   accessLostHandled = false;
   unsubscribers.push(listenCollection("tasks", enrichTask, (list) => {
     tasks = list;
+    refreshLocationFilterIfNeeded();
     renderTasks();
     if (currentTaskId) openTask(currentTaskId);
   }, onListenerError));
@@ -371,12 +413,15 @@ function startListeners() {
   if (staff && staff.employeeId) {
     unsubscribers.push(onSnapshot(doc(db, "settings", "locations"), (snap) => {
       locationSettings = snap.exists() ? (snap.data() || {}) : null;
+      locationsLoaded = true;
       fillLocationSelect();
+      restoreDraftLocation();
       fillLocationFilter();
       renderTasks();
       if (currentTaskId) openTask(currentTaskId);
     }, (err) => {
       locationSettings = null;
+      locationsLoaded = true;
       fillLocationSelect();
       fillLocationFilter();
       renderTasks();
@@ -412,6 +457,7 @@ function startListeners() {
       }
       const mine = normalizeEmployee(snap.id, snap.data());
       ownEmployee = mine;
+      applyProfile(snap.data() || {});
       if (mine.active === false) {
         onListenerError(
           { code: "permission-denied" },
@@ -428,6 +474,10 @@ function startListeners() {
 function stopListeners() {
   ownCompletions = {};
   locationSettings = null;
+  locationsLoaded = false;
+  ownProfile = { department: "", canAdmin: false };
+  profileFallbackTried = false;
+  renderAdminSwitch();
   unsubscribers.forEach((stop) => {
     try {
       if (typeof stop === "function") stop();
@@ -440,6 +490,185 @@ function stopListeners() {
   tasks = [];
   templates = [];
   ownEmployee = null;
+}
+
+// --- v3a: profiel (afdeling, canAdmin) -------------------------------------
+// Plek volgens afstemming met ZLA: employees/{id}.department/canAdmin; fallback eigen staffAccounts/{uid}.
+let profileFallbackTried = false;
+
+function applyProfile(data) {
+  const hasDept = data && Object.prototype.hasOwnProperty.call(data, "department");
+  const hasAdmin = data && Object.prototype.hasOwnProperty.call(data, "canAdmin");
+  ownProfile = {
+    department: hasDept ? normalizeDepartment(data.department) : ownProfile.department,
+    canAdmin: hasAdmin ? data.canAdmin === true : ownProfile.canAdmin
+  };
+  renderAdminSwitch();
+  fillLocationFilter();
+  renderTasks();
+  if ((!hasDept || !hasAdmin) && !profileFallbackTried) {
+    profileFallbackTried = true;
+    const uid = auth.currentUser && auth.currentUser.uid;
+    if (!uid) return;
+    getDoc(doc(db, "staffAccounts", uid)).then((snap) => {
+      const acc = snap.exists() ? (snap.data() || {}) : {};
+      if (!hasDept && "department" in acc) ownProfile.department = normalizeDepartment(acc.department);
+      if (!hasAdmin && "canAdmin" in acc) ownProfile.canAdmin = acc.canAdmin === true;
+      renderAdminSwitch();
+      fillLocationFilter();
+      renderTasks();
+    }).catch(() => {});
+  }
+}
+
+function renderAdminSwitch() {
+  const link = document.getElementById("admin-switch-btn");
+  if (!link) return;
+  const show = Boolean(getCurrentStaff()) && ownProfile.canAdmin === true;
+  link.classList.toggle("hidden", !show);
+  link.hidden = !show;
+}
+
+// --- v3a: sessies (staffSessions/{sessionId}) ---------------------------------
+const SESSION_KEY = "zeiklijst-staff-sessions"; // {uid: sessionId} op dit toestel
+const SESSION_TOUCH_MS = 5 * 60 * 1000;
+let sessionId = "";
+let sessionUnsub = null;
+let sessionLastTouch = 0;
+let sessionTimer = 0;
+let sessionSeen = false;
+
+function randomId(n = 20) {
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(n);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => abc[b % abc.length]).join("");
+}
+
+function readSessionMap() {
+  try {
+    const m = JSON.parse(localStorage.getItem(SESSION_KEY) || "{}");
+    return m && typeof m === "object" && !Array.isArray(m) ? m : {};
+  } catch { return {}; }
+}
+
+function writeSessionId(uid, id) {
+  const m = readSessionMap();
+  if (id) m[uid] = id; else delete m[uid];
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(m)); } catch { /* ignore */ }
+}
+
+// Korte omschrijving, geen volledige user-agent.
+function shortDevice() {
+  const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "");
+  const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android"
+    : /Windows/.test(ua) ? "Windows" : /Mac OS X|Macintosh/.test(ua) ? "Mac" : /Linux/.test(ua) ? "Linux" : "Onbekend";
+  const browser = /Edg\//.test(ua) ? "Edge" : /SamsungBrowser/.test(ua) ? "Samsung Internet" : /Firefox|FxiOS/.test(ua) ? "Firefox"
+    : /CriOS|Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
+  const standalone = typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches;
+  return `${os} · ${browser}${standalone ? " · app" : ""}`.slice(0, 80);
+}
+
+async function startSession(staff) {
+  const uid = auth.currentUser && auth.currentUser.uid;
+  if (!uid || !staff || !staff.employeeId) return;
+  stopSession();
+  const known = readSessionMap()[uid];
+  let id = "";
+  if (known) {
+    try {
+      await updateDoc(doc(db, "staffSessions", known), { lastActive: serverTimestamp() });
+      id = known;
+    } catch {
+      id = ""; // weg, beëindigd of geen rechten: nieuwe sessie
+    }
+  }
+  if (!id) {
+    id = randomId();
+    try {
+      await setDoc(doc(db, "staffSessions", id), {
+        employeeId: staff.employeeId,
+        uid,
+        device: shortDevice(),
+        createdAt: serverTimestamp(),
+        lastActive: serverTimestamp(),
+        revoked: false
+      });
+    } catch (err) {
+      // Regels nog niet gepubliceerd: app werkt gewoon zonder sessie-doc.
+      console.warn("staffSessions niet beschikbaar; app blijft ingelogd.", err && err.code);
+      return;
+    }
+  }
+  if (!getCurrentStaff()) return;
+  sessionId = id;
+  sessionSeen = false;
+  writeSessionId(uid, id);
+  sessionLastTouch = Date.now();
+  sessionUnsub = onSnapshot(doc(db, "staffSessions", id), (snap) => {
+    if (!snap.exists()) {
+      if (sessionSeen && !snap.metadata.fromCache) endSessionByAdmin(uid);
+      return;
+    }
+    sessionSeen = true;
+    if ((snap.data() || {}).revoked === true) endSessionByAdmin(uid);
+  }, () => { /* geweigerd: niets doen */ });
+  sessionTimer = window.setInterval(touchSession, 60 * 1000);
+}
+
+function touchSession() {
+  if (!sessionId || document.hidden) return;
+  if (Date.now() - sessionLastTouch < SESSION_TOUCH_MS) return;
+  sessionLastTouch = Date.now();
+  updateDoc(doc(db, "staffSessions", sessionId), { lastActive: serverTimestamp() }).catch(() => {});
+}
+
+function stopSession() {
+  if (sessionUnsub) { try { sessionUnsub(); } catch { /* ignore */ } }
+  sessionUnsub = null;
+  clearInterval(sessionTimer);
+  sessionTimer = 0;
+  sessionId = "";
+}
+
+function endSessionByAdmin(uid) {
+  if (!sessionId) return;
+  writeSessionId(uid, "");
+  stopSession();
+  logoutStaff("Je sessie op dit toestel is beëindigd. Log opnieuw in.");
+}
+
+// --- v3a: onderhoudsscherm via settings/maintenance -------------------------
+// Vervangt het oude onderhoudsscherm (aparte deploy met maintenance.js, 7364ff1).
+// Leesbaar vóór inloggen; geweigerd of ontbrekend doc = app gewoon bruikbaar.
+let maintenanceUnsub = null;
+let maintenanceRetry = 0;
+
+function applyMaintenance(data) {
+  const on = Boolean(data && data.enabled === true);
+  const screen = document.getElementById("maintenance-screen");
+  const msg = document.getElementById("maintenance-message");
+  if (msg) {
+    const text = on ? String(data.message || "").trim().slice(0, 300) : "";
+    msg.textContent = text || "Probeer het straks opnieuw.";
+  }
+  if (screen) {
+    screen.classList.toggle("hidden", !on);
+    screen.hidden = !on;
+  }
+  document.body.classList.toggle("is-maintenance", on);
+}
+
+function watchMaintenance() {
+  if (maintenanceUnsub) { try { maintenanceUnsub(); } catch { /* ignore */ } }
+  clearTimeout(maintenanceRetry);
+  maintenanceUnsub = onSnapshot(doc(db, "settings", "maintenance"), (snap) => {
+    applyMaintenance(snap.exists() ? snap.data() : null);
+  }, () => {
+    // Geweigerd/offline: laatst bekende stand houden en later opnieuw proberen.
+    maintenanceUnsub = null;
+    maintenanceRetry = window.setTimeout(watchMaintenance, 60 * 1000);
+  });
 }
 
 function currentView() {
@@ -503,6 +732,9 @@ function setupHeaderMenu() {
     btn.setAttribute("aria-expanded", String(open));
   };
   btn.addEventListener("click", toggle);
+  menu.addEventListener("click", (event) => {
+    if (event.target.closest(".menu-action")) close(); // B2
+  });
   document.addEventListener("click", (event) => {
     if (!menu.classList.contains("hidden") && !event.target.closest(".header-more")) close();
   });
@@ -571,12 +803,24 @@ function fillLocationFilter() {
     sel.append(option);
   };
   add("all", "Alle");
-  activeLocationItems().forEach((item) => add(item.id, item.label || item.id));
+  const dept = ownProfile.department;
+  const deptOk = (id) => !dept || dept === "beide" || !locationDepartment(id, locationSettings)
+    || locationDepartment(id, locationSettings) === "beide" || locationDepartment(id, locationSettings) === dept;
+  const openIds = new Set(tasks.filter((t) => t.status !== "afgerond" && t.locationId && visibleForMe(t)).map((t) => t.locationId));
+  locationItems().forEach((item) => {
+    if (item.active !== false) {
+      if (deptOk(item.id) || openIds.has(item.id)) add(item.id, item.label || item.id);
+    } else if (openIds.has(item.id)) {
+      // B21: inactief pad met open taken blijft filterbaar.
+      add(item.id, `${item.label || item.id} (inactief)`);
+    }
+  });
   add(LOCATION_NONE_FILTER, "Zonder locatie");
   const allowed = new Set([...sel.options].map((option) => option.value));
   const next = allowed.has(current) ? current : "all";
   sel.value = next;
-  if (next !== current) {
+  // B3: de opgeslagen keuze pas overschrijven als de locaties echt geladen zijn.
+  if (next !== current && locationsLoaded && tasks.length) {
     try { localStorage.setItem(LOCATION_FILTER_KEY, next); } catch { /* ignore */ }
   }
 }
@@ -630,20 +874,13 @@ function renderTasks() {
   const locFilter = currentLocationFilter();
   const visible = tasks.filter((task) => (
     task.status !== "afgerond"
+    && visibleForMe(task)
     && matchesFilter(task, filter)
     && matchesLocationFilter(task, locFilter)
   ));
-  const byUrgencyThen = (stampFn) => (a, b) => {
-    const urgentDiff = Number(isUrgent(b)) - Number(isUrgent(a));
-    if (urgentDiff) return urgentDiff;
-    return stampFn(a).localeCompare(stampFn(b));
-  };
-  const openTasks = visible
-    .filter((task) => task.status === "open")
-    .sort(byUrgencyThen(createdStamp));
-  const pendingTasks = visible
-    .filter((task) => task.status === "pending")
-    .sort(byUrgencyThen(pendingStamp));
+  // v3a punt 4: padvolgorde, binnen pad spoed, dan streefdatum (leeg achteraan).
+  const openTasks = sortTasks(visible.filter((task) => task.status === "open"), locationSettings, createdStamp);
+  const pendingTasks = sortTasks(visible.filter((task) => task.status === "pending"), locationSettings, pendingStamp);
 
   const openList = document.getElementById("task-list");
   const pendingList = document.getElementById("pending-list");
@@ -685,7 +922,7 @@ function renderTasks() {
   const empty = !showOpen && !showPending && !forcePending;
   boardEmpty.classList.toggle("hidden", !empty);
   if (empty) {
-    boardEmpty.textContent = tasks.some((task) => task.status !== "afgerond")
+    boardEmpty.textContent = tasks.some((task) => task.status !== "afgerond" && visibleForMe(task))
       ? "Geen taken in dit filter."
       : "Geen openstaande taken.";
   }
@@ -744,6 +981,7 @@ function taskItemElement(task) {
     el("div", "task-title", task.title || ""),
     el("div", "task-location" + (location ? "" : " hidden"), location),
     el("div", "task-origin" + (origin ? "" : " hidden"), origin),
+    el("div", "task-claim" + (task.claimedBy ? "" : " hidden"), claimLabel(task)),
     el("div", "task-age" + (age ? "" : " hidden"), age)
   );
   main.append(textCol);
@@ -825,14 +1063,29 @@ function openTask(id) {
 
   const actions = document.getElementById("modal-actions");
   actions.replaceChildren();
+  if (task.claimedBy) actions.append(el("p", "task-claim", claimLabel(task)));
   if (!allowed) {
-    // Someone else's task: read-only.
+    // B6: uitleg i.p.v. een ontbrekende knop.
+    actions.append(el("p", "form-notice", `Toegewezen aan ${staffAssigneeLabel(task)}: alleen die persoon kan afvinken.`));
   } else if (task.status === "open") {
     const btn = el("button", "success", "Markeer als gedaan");
     btn.type = "button";
     btn.id = "tick-btn";
     btn.onclick = () => guardedToggle(() => markPending(task.id));
     actions.append(btn);
+    if (!task.claimedBy) {
+      const claim = el("button", "secondary", "Ik pak deze op");
+      claim.type = "button";
+      claim.id = "claim-btn";
+      claim.onclick = () => guardedToggle(() => setClaim(task.id, true));
+      actions.append(claim);
+    } else if (isClaimedByMe(task)) {
+      const release = el("button", "secondary", "Loslaten");
+      release.type = "button";
+      release.id = "release-btn";
+      release.onclick = () => guardedToggle(() => setClaim(task.id, false));
+      actions.append(release);
+    }
   } else if (task.status === "pending" && canUntick(task)) {
     const btn = el("button", "secondary", "Ongedaan maken");
     btn.type = "button";
@@ -900,15 +1153,46 @@ let lastToggleAt = 0;
 // Double-submit / rate guard for tick and untick (M3).
 async function guardedToggle(fn) {
   const now = Date.now();
-  if (toggleBusy || now - lastToggleAt < TOGGLE_COOLDOWN_MS) return;
+  if (toggleBusy || now - lastToggleAt < TOGGLE_COOLDOWN_MS) {
+    showToast("Even wachten…", "success"); // B5: geen stille tik meer
+    return;
+  }
   toggleBusy = true;
   lastToggleAt = now;
-  document.querySelectorAll("#tick-btn, #untick-btn").forEach((b) => { b.disabled = true; });
+  const sel = "#tick-btn, #untick-btn, #claim-btn, #release-btn";
+  document.querySelectorAll(sel).forEach((b) => { b.disabled = true; });
   try {
     await fn();
   } finally {
     toggleBusy = false;
-    document.querySelectorAll("#tick-btn, #untick-btn").forEach((b) => { b.disabled = false; });
+    document.querySelectorAll(sel).forEach((b) => { b.disabled = false; });
+  }
+}
+
+// v3a "Ik pak deze op" (data-afspraak punt 8): alleen zichzelf zetten of de eigen claim weghalen.
+async function setClaim(id, claim) {
+  const task = tasks.find((item) => item.id === id);
+  const staff = getCurrentStaff();
+  if (!task || !staff || task.status !== "open" || !canToggle(task)) return;
+  try {
+    if (claim) {
+      if (task.claimedBy) {
+        showToast(claimLabel(task) + ".", "error");
+        return;
+      }
+      const name = officialStaffName().slice(0, 60);
+      await updateDoc(doc(db, "tasks", id), {
+        claimedBy: { employeeId: staff.employeeId, name },
+        claimedAt: serverTimestamp()
+      });
+      showToast("Je hebt deze taak opgepakt.", "success");
+    } else {
+      if (!isClaimedByMe(task)) return;
+      await updateDoc(doc(db, "tasks", id), { claimedBy: deleteField(), claimedAt: deleteField() });
+      showToast("Taak losgelaten.", "success");
+    }
+  } catch (err) {
+    showToast(isPermissionDenied(err) ? "Oppakken is nog niet beschikbaar." : writeErrorMessage(err), "error");
   }
 }
 
@@ -1427,8 +1711,92 @@ function setupStaffPages() {
       closePage("report-page");
       return;
     }
-    if (add && !add.classList.contains("hidden")) closePage("add-task-page");
+    if (add && !add.classList.contains("hidden")) {
+      closePage("add-task-page");
+      return;
+    }
+    const modal = document.getElementById("modal");
+    if (modal && !modal.classList.contains("hidden")) closeModal(); // B4
   });
+}
+
+// --- Restpunt v2: concept bewaren bij verversen -------------------------------
+// Tekstvelden gaan via sessionStorage mee over de reload (zelfde tabblad). Een gekozen
+// foto kan een browser niet bewaren; daarvoor een melding.
+const DRAFT_KEY = "zeiklijst-concept";
+const DRAFT_MAX_AGE_MS = 30 * 60 * 1000;
+let draftLocationToRestore = "";
+
+function pageOpen(id) {
+  const page = document.getElementById(id);
+  return Boolean(page && !page.classList.contains("hidden"));
+}
+
+function fieldValue(id) {
+  const el = document.getElementById(id);
+  return el ? String(el.value || "") : "";
+}
+
+function hasFile(id) {
+  const el = document.getElementById(id);
+  return Boolean(el && el.files && el.files.length);
+}
+
+function saveDraft() {
+  const staff = getCurrentStaff();
+  if (!staff) return;
+  let draft = null;
+  if (pageOpen("add-task-page")) {
+    draft = {
+      page: "add",
+      title: fieldValue("add-task-title-input"),
+      description: fieldValue("add-task-description-input"),
+      locationId: fieldValue("add-task-location-input"),
+      assignee: selectedAddTaskAssignee(),
+      photo: hasFile("add-task-photo")
+    };
+  } else if (pageOpen("report-page")) {
+    draft = { page: "report", description: fieldValue("report-description"), photo: hasFile("report-photo") };
+  }
+  try {
+    if (draft) sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, employeeId: staff.employeeId, at: Date.now() }));
+  } catch { /* ignore quota */ }
+}
+
+function restoreDraft() {
+  let draft = null;
+  try { draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || "null"); } catch { draft = null; }
+  try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+  const staff = getCurrentStaff();
+  if (!draft || !staff || draft.employeeId !== staff.employeeId) return;
+  if (!(Date.now() - Number(draft.at) < DRAFT_MAX_AGE_MS)) return;
+  const set = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.value = String(value || "");
+  };
+  if (draft.page === "add") {
+    openAddTaskPage();
+    set("add-task-title-input", draft.title);
+    set("add-task-description-input", draft.description);
+    setAddTaskAssignee(draft.assignee === "allen" ? "allen" : "self");
+    draftLocationToRestore = String(draft.locationId || "");
+    restoreDraftLocation();
+  } else if (draft.page === "report") {
+    openReportPage();
+    set("report-description", draft.description);
+    updateReportCount();
+  } else {
+    return;
+  }
+  showToast(draft.photo ? "Je concept is teruggezet. Kies de foto opnieuw." : "Je concept is teruggezet.", "success");
+}
+
+function restoreDraftLocation() {
+  if (!draftLocationToRestore) return;
+  const sel = document.getElementById("add-task-location-input");
+  if (!sel || ![...sel.options].some((o) => o.value === draftLocationToRestore)) return;
+  sel.value = draftLocationToRestore;
+  draftLocationToRestore = "";
 }
 
 function setupUpdateBanner() {
@@ -1471,6 +1839,7 @@ function setupUpdateBanner() {
     return DRAFT_IDS.some((id) => {
       const el = document.getElementById(id);
       if (!el) return false;
+      if (el.closest(".hidden, [hidden]")) return false; // verborgen formulier is geen concept
       if (el.type === "file") return el.files && el.files.length > 0;
       return String(el.value || "").trim() !== "";
     });
@@ -1514,12 +1883,14 @@ function setupUpdateBanner() {
   function safeReload() {
     if (reloading) return;
     const now = Date.now();
-    if (!canAutoReload(now)) {
+    // B8: een bewuste tik op de balk negeert de 30 s-guard.
+    if (!userRequestedUpdate && !canAutoReload(now)) {
       showBanner();
       return;
     }
     reloading = true;
     writeGuard(appVersion(), now);
+    saveDraft();
     location.reload();
   }
 
@@ -1542,6 +1913,7 @@ function setupUpdateBanner() {
 
   banner.addEventListener("click", () => {
     userRequestedUpdate = true;
+    saveDraft(); // restpunt v2: concept niet kwijt bij tikken op de verversbalk
     if (pendingReload) {
       if (reloading) return;
       reloading = true;
@@ -1609,13 +1981,18 @@ function setupUpdateBanner() {
 
 setupUi();
 paintAppVersionLabel();
+watchMaintenance();
 
 initStaffAuth({
   showToast,
-  onLoggedIn() {
+  onLoggedIn(staff) {
     startListeners();
+    renderAdminSwitch();
+    startSession(staff);
+    restoreDraft();
   },
   onLoggedOut() {
+    stopSession();
     closeModal();
     closeStaffPages();
     stopListeners();

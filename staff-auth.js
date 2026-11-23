@@ -23,9 +23,10 @@ import {
   startCodeEmail,
   normalizeStartCode,
   formatStartCode,
-  isValidStartCode
-} from "./shared.js";
-import { sendResetRequest } from "./limits.js";
+  isValidStartCode,
+  normalizeName
+} from "./shared.js?v=21";
+import { sendResetRequest } from "./limits.js?v=21";
 
 // Login model: ZLA contract zla-step3-status.md (audit H1/M1/M2).
 // - Claim (first time, new device, after reset): ONLY the start code.
@@ -37,7 +38,8 @@ import { sendResetRequest } from "./limits.js";
 // - No local data -> start code screen. New device / forgotten PIN -> new code.
 // - ZL never reads or writes nameIndex, never lists employees, never reads taskMeta.
 
-const STORAGE_DEVICE = "zeiklijst-staff-device";
+const STORAGE_DEVICE = "zeiklijst-staff-device"; // laatst gebruikte medewerker op dit toestel
+const STORAGE_DEVICES = "zeiklijst-staff-devices"; // v3a: alle geregistreerde medewerkers op dit toestel
 const LEGACY_KEYS = [
   "zeiklijst-staff-id",
   "zeiklijst-staff-name-key",
@@ -62,6 +64,10 @@ const MSG_LOCKED = "Te vaak een onjuiste pincode. " + MSG_NEEDS_CODE;
 const MSG_RESET_SENT = "Verzoek verstuurd. Je leidinggevende geeft je persoonlijk een nieuwe startcode.";
 const MSG_RESET_SENT_AGAIN = "Je verzoek is al verstuurd. Je leidinggevende geeft je persoonlijk een nieuwe startcode.";
 const MSG_OFFLINE = "Geen verbinding. Probeer het opnieuw als je weer online bent.";
+const MSG_TIMEOUT = "Het duurt te lang (geen antwoord binnen 15 seconden). Controleer je verbinding, sluit andere tabbladen met Zeiklijst of de beheer-app, en probeer het opnieuw.";
+const MSG_NOT_ON_DEVICE = "Op dit toestel is nog geen account met deze naam. Kies \u2018Registreren\u2019 en vul je startcode in (één keer per toestel).";
+const MSG_FIRST_TIME = "Eerste keer op dit toestel? Kies \u2018Registreren\u2019 en vul de startcode in van je leidinggevende.";
+const NETWORK_TIMEOUT_MS = 15000;
 
 let currentStaff = null;
 let pending = null; // claim in progress: {employeeId, name, pinVersion, code}
@@ -90,37 +96,78 @@ function pinVersionOf(value) {
   return Number.isFinite(n) ? Math.trunc(n) : 0;
 }
 
-function loadDevice() {
+function parseAccount(d) {
+  if (!d || typeof d !== "object") return null;
+  const employeeId = String(d.employeeId || "").trim();
+  const loginKey = normalizeStartCode(d.loginKey || "");
+  if (!employeeId || !isValidStartCode(loginKey)) return null;
+  return {
+    employeeId,
+    pinVersion: pinVersionOf(d.pinVersion),
+    loginKey: loginKey.toLowerCase(),
+    name: String(d.name || "").trim().slice(0, RESET_NAME_MAX)
+  };
+}
+
+// Alle accounts op dit toestel (v3a: meerdere medewerkers per toestel).
+function loadAccounts() {
   LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+  let list = [];
   try {
-    const d = JSON.parse(localStorage.getItem(STORAGE_DEVICE) || "null");
-    if (!d || typeof d !== "object") return null;
-    const employeeId = String(d.employeeId || "").trim();
-    const loginKey = normalizeStartCode(d.loginKey || "");
-    if (!employeeId || !isValidStartCode(loginKey)) return null;
-    return {
-      employeeId,
-      pinVersion: pinVersionOf(d.pinVersion),
-      loginKey: loginKey.toLowerCase(),
-      name: String(d.name || "").trim().slice(0, RESET_NAME_MAX)
-    };
-  } catch {
-    return null;
-  }
+    const raw = JSON.parse(localStorage.getItem(STORAGE_DEVICES) || "[]");
+    if (Array.isArray(raw)) list = raw.map(parseAccount).filter(Boolean);
+  } catch { list = []; }
+  let last = null;
+  try { last = parseAccount(JSON.parse(localStorage.getItem(STORAGE_DEVICE) || "null")); } catch { last = null; }
+  if (last && !list.some((a) => a.employeeId === last.employeeId)) list.unshift(last);
+  return list;
+}
+
+function storeAccounts(list) {
+  localStorage.setItem(STORAGE_DEVICES, JSON.stringify(list.map((a) => ({
+    employeeId: a.employeeId, pinVersion: a.pinVersion, loginKey: a.loginKey, name: a.name || ""
+  }))));
+}
+
+// Laatst gebruikte account (voor de begroeting en het vooringevulde naamveld).
+function loadDevice() {
+  const list = loadAccounts();
+  let last = null;
+  try { last = parseAccount(JSON.parse(localStorage.getItem(STORAGE_DEVICE) || "null")); } catch { last = null; }
+  if (last) return list.find((a) => a.employeeId === last.employeeId) || last;
+  return list[0] || null;
+}
+
+function findAccountByName(name) {
+  const key = normalizeName(name);
+  if (!key) return null;
+  return loadAccounts().find((a) => normalizeName(a.name) === key) || null;
 }
 
 function saveDevice(staff) {
-  localStorage.setItem(STORAGE_DEVICE, JSON.stringify({
+  const entry = {
     employeeId: staff.employeeId,
     pinVersion: staff.pinVersion,
     loginKey: staff.loginKey,
     name: staff.name || ""
-  }));
+  };
+  localStorage.setItem(STORAGE_DEVICE, JSON.stringify(entry));
+  const list = loadAccounts().filter((a) => a.employeeId !== entry.employeeId);
+  list.unshift(entry);
+  storeAccounts(list);
 }
 
-function clearDevice() {
-  localStorage.removeItem(STORAGE_DEVICE);
-  localStorage.removeItem(STORAGE_PIN_FAILS);
+// Alleen het account van deze medewerker vergeten (andere medewerkers op dit toestel blijven).
+function clearDevice(employeeId) {
+  const list = employeeId ? loadAccounts().filter((a) => a.employeeId !== employeeId) : [];
+  storeAccounts(list);
+  let last = null;
+  try { last = parseAccount(JSON.parse(localStorage.getItem(STORAGE_DEVICE) || "null")); } catch { last = null; }
+  if (!employeeId || !last || last.employeeId === employeeId) {
+    if (list[0]) localStorage.setItem(STORAGE_DEVICE, JSON.stringify(list[0]));
+    else localStorage.removeItem(STORAGE_DEVICE);
+  }
+  clearPinFails(employeeId);
   LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
 }
 
@@ -128,8 +175,45 @@ function expectedEmail(staff) {
   return startCodeEmail(staff.employeeId, staff.pinVersion, staff.loginKey).toLowerCase();
 }
 
-function pinFails() {
-  return Number(localStorage.getItem(STORAGE_PIN_FAILS)) || 0;
+function readPinFails() {
+  try {
+    const v = JSON.parse(localStorage.getItem(STORAGE_PIN_FAILS) || "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch { return {}; }
+}
+
+function pinFails(employeeId) {
+  return Number(readPinFails()[employeeId]) || 0;
+}
+
+function setPinFails(employeeId, n) {
+  const all = readPinFails();
+  all[employeeId] = n;
+  localStorage.setItem(STORAGE_PIN_FAILS, JSON.stringify(all));
+}
+
+function clearPinFails(employeeId) {
+  if (!employeeId) { localStorage.removeItem(STORAGE_PIN_FAILS); return; }
+  const all = readPinFails();
+  delete all[employeeId];
+  localStorage.setItem(STORAGE_PIN_FAILS, JSON.stringify(all));
+}
+
+// v3a: time-out (~15 s) zodat de startcode niet eindeloos blijft hangen.
+function withTimeout(promise, ms = NETWORK_TIMEOUT_MS) {
+  let timer = 0;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error("timeout");
+      err.code = "zl/timeout";
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function isTimeout(err) {
+  return errCode(err) === "zl/timeout";
 }
 
 // --- Errors ----------------------------------------------------------------
@@ -160,6 +244,7 @@ function isWrongPin(err) {
 }
 
 function genericError(err, what) {
+  if (isTimeout(err)) return MSG_TIMEOUT;
   if (isOffline(err)) return MSG_OFFLINE;
   if (errCode(err) === "auth/too-many-requests") return "Te veel pogingen. Probeer het later opnieuw.";
   if (errCode(err) === "auth/operation-not-allowed" || isPermission(err)) {
@@ -233,6 +318,7 @@ function showStep(step, options = {}) {
     const form = $(id);
     if (form) form.classList.toggle("hidden", key !== step);
   });
+  renderLoginTabs(step);
   ERROR_IDS.forEach((id) => setText(id, ""));
   Object.entries(NOTICE_IDS).forEach(([key, id]) => setText(id, key === step ? options.notice || "" : ""));
   ["staff-pin-new", "staff-pin-confirm", "staff-pin-input"].forEach((id) => {
@@ -243,12 +329,13 @@ function showStep(step, options = {}) {
   if (step === "code") {
     const codeInput = $("staff-code-input");
     if (codeInput) codeInput.value = "";
-    const back = $("staff-code-back");
-    if (back) back.classList.toggle("hidden", !device);
   }
   if (step === "pin") {
     const hello = $("staff-pin-hello");
-    if (hello) hello.textContent = device && device.name ? `Hoi ${device.name}, vul je pincode in.` : "Vul je pincode in.";
+    if (hello) hello.textContent = device && device.name ? `Hoi ${device.name}, vul je naam en pincode in.` : "Vul je naam en pincode in.";
+    const nameInput = $("staff-pin-name");
+    if (nameInput && !options.keepName) nameInput.value = device && device.name ? device.name : "";
+    if (!device && !options.notice) setText("staff-pin-notice", MSG_FIRST_TIME);
   }
   if (step === "setup") {
     const hello = $("staff-setup-hello");
@@ -267,7 +354,7 @@ function showStep(step, options = {}) {
     if (form) form.querySelectorAll("button, input, textarea").forEach((el) => { el.disabled = false; });
   }
   // Hidden username field so password managers file the PIN under the right person.
-  ["staff-setup-username", "staff-pin-username"].forEach((id) => {
+  ["staff-setup-username"].forEach((id) => {
     const el = $(id);
     if (!el) return;
     const name = step === "setup" ? (pending && pending.name) : (device && device.name);
@@ -276,7 +363,7 @@ function showStep(step, options = {}) {
   const focusEl = $({
     code: "staff-code-input",
     setup: "staff-pin-new",
-    pin: "staff-pin-input",
+    pin: ($("staff-pin-name") && !$("staff-pin-name").value) ? "staff-pin-name" : "staff-pin-input",
     reset: "staff-reset-name"
   }[step]);
   if (focusEl) {
@@ -284,13 +371,36 @@ function showStep(step, options = {}) {
   }
 }
 
-// The normal login screen for this device: PIN if it has a login key, else start code.
+// v3a: twee duidelijke keuzes; standaard altijd "Inloggen" (naam + pincode).
+function renderLoginTabs(step) {
+  const tabs = $("staff-login-tabs");
+  if (!tabs) return;
+  const visible = step === "pin" || step === "code";
+  tabs.classList.toggle("hidden", !visible);
+  [["staff-tab-login", "pin"], ["staff-tab-register", "code"]].forEach(([id, key]) => {
+    const btn = $(id);
+    if (!btn) return;
+    const on = step === key;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-selected", String(on));
+    btn.tabIndex = on ? 0 : -1;
+  });
+}
+
 function showLoginStart(notice) {
-  if (loadDevice()) showStep("pin", { notice });
-  else showStep("code", { notice: notice || MSG_NEEDS_CODE });
+  showStep("pin", { notice });
+}
+
+// Restpunt v2: codevelden leeg na inloggen (anders telt de app als "bezig" en ververst niet).
+function clearLoginInputs() {
+  ["staff-code-input", "staff-pin-new", "staff-pin-confirm", "staff-pin-input", "staff-reset-name", "staff-reset-note"].forEach((id) => {
+    const el = $(id);
+    if (el) el.value = "";
+  });
 }
 
 function hideLogin() {
+  clearLoginInputs();
   const login = $("staff-login");
   if (login) {
     login.classList.add("hidden");
@@ -363,7 +473,7 @@ async function checkOwnEmployee(staff) {
 function acceptStaff(staff) {
   currentStaff = staff;
   saveDevice(staff);
-  localStorage.removeItem(STORAGE_PIN_FAILS);
+  clearPinFails(staff.employeeId);
   pending = null;
   renderHeaderUser();
   hideLogin();
@@ -383,7 +493,7 @@ async function finishSession(staff) {
   await signOut(auth).catch(() => {});
   if (check.reason === "denied") {
     // PIN reset (pinVersion bumped) or account no longer valid: this device's key is useless.
-    clearDevice();
+    clearDevice(staff.employeeId);
     showStep("code", { notice: check.message });
   } else if (check.reason === "inactive") {
     showLoginStart(check.message);
@@ -394,9 +504,9 @@ async function finishSession(staff) {
 }
 
 async function restoreSession(user) {
-  const device = loadDevice();
   const email = String((user && user.email) || "").toLowerCase();
-  if (!device || email !== expectedEmail(device)) {
+  const device = loadAccounts().find((a) => expectedEmail(a) === email) || null;
+  if (!device) {
     await signOut(auth).catch(() => {});
     return false;
   }
@@ -420,7 +530,7 @@ async function onCodeSubmit(event) {
     await ensureAnonymous();
     let snap;
     try {
-      snap = await getDoc(doc(db, "startCodes", code));
+      snap = await withTimeout(getDoc(doc(db, "startCodes", code)));
     } catch (err) {
       if (isPermission(err)) {
         // Unknown, used and expired all look the same (rules refuse the get).
@@ -464,7 +574,7 @@ async function claimBatch(uid, claim) {
     usedBy: uid,
     usedAt: serverTimestamp()
   });
-  await batch.commit();
+  await withTimeout(batch.commit());
 }
 
 async function staffAccountExists(uid) {
@@ -532,6 +642,14 @@ async function onPinSetupSubmit(event) {
     try {
       await claimBatch(user.uid, claim);
     } catch (err) {
+      if (isTimeout(err)) {
+        // De batch kan nog in de wachtrij staan: account NIET verwijderen.
+        // Opnieuw proberen met dezelfde pincode logt in op dit account en herhaalt de batch.
+        await signOut(auth).catch(() => {});
+        setText("staff-pin-setup-error", MSG_TIMEOUT + " Gebruik dan dezelfde pincode.");
+        setBusy(form, false);
+        return;
+      }
       // Remove the just-created auth account so no orphan stays behind. If that
       // fails, a retry with the same PIN signs in to it and repeats the batch.
       await deleteUser(user).catch(() => {});
@@ -554,7 +672,7 @@ async function onPinSetupSubmit(event) {
   };
   // The key lives only on this device from now on (replaces any earlier employee here).
   saveDevice(staff);
-  localStorage.removeItem(STORAGE_PIN_FAILS);
+  clearPinFails(staff.employeeId);
   try {
     await finishSession(staff);
   } finally {
@@ -569,11 +687,16 @@ async function onPinSubmit(event) {
   if (busy) return;
   const form = event.currentTarget;
   const pin = ($("staff-pin-input") && $("staff-pin-input").value) || "";
+  const name = (($("staff-pin-name") && $("staff-pin-name").value) || "").trim();
   setText("staff-pin-error", "");
   setText("staff-pin-notice", "");
-  const device = loadDevice();
+  if (!name) {
+    setText("staff-pin-error", "Vul je naam in.");
+    return;
+  }
+  const device = findAccountByName(name);
   if (!device) {
-    showStep("code", { notice: MSG_NEEDS_CODE });
+    setText("staff-pin-error", MSG_NOT_ON_DEVICE);
     return;
   }
   if (!validPin(pin)) {
@@ -584,21 +707,21 @@ async function onPinSubmit(event) {
   try {
     await ensurePersistence();
     if (auth.currentUser) await signOut(auth).catch(() => {});
-    await signInWithEmailAndPassword(auth, expectedEmail(device), staffPassword(pin, device.employeeId));
-    localStorage.removeItem(STORAGE_PIN_FAILS);
+    await withTimeout(signInWithEmailAndPassword(auth, expectedEmail(device), staffPassword(pin, device.employeeId)));
+    clearPinFails(device.employeeId);
     setBusy(form, false);
     await finishSession({ ...device });
   } catch (err) {
     if (isWrongPin(err)) {
-      const fails = pinFails() + 1;
+      const fails = pinFails(device.employeeId) + 1;
       if (fails >= MAX_PIN_FAILS) {
-        // Lockout: this device's login key is dropped; only a new start code helps.
-        clearDevice();
+        // Lockout: this employee's login key on this device is dropped; only a new start code helps.
+        clearDevice(device.employeeId);
         setBusy(form, false);
         showStep("code", { notice: MSG_LOCKED });
         return;
       }
-      localStorage.setItem(STORAGE_PIN_FAILS, String(fails));
+      setPinFails(device.employeeId, fails);
       const left = MAX_PIN_FAILS - fails;
       setText("staff-pin-error", `Onjuiste pincode. Nog ${left} ${left === 1 ? "poging" : "pogingen"}.`);
     } else {
@@ -666,8 +789,9 @@ async function onResetSubmit(event) {
 
 // Logging out keeps this device's login key, so the next login is PIN only.
 // "Andere startcode gebruiken" on the PIN screen replaces it with a new claim.
-export async function logoutStaff(message) {
+export async function logoutStaff(message, options = {}) {
   const hadStaff = Boolean(currentStaff);
+  closeHeaderMenu();
   currentStaff = null;
   pending = null;
   renderHeaderUser();
@@ -676,8 +800,18 @@ export async function logoutStaff(message) {
   } catch {
     // Still return to the login screen.
   }
-  showLoginStart(typeof message === "string" ? message : "");
+  const text = typeof message === "string" ? message : "";
+  if (options && options.step === "code") showStep("code", { notice: text });
+  else showLoginStart(text);
   if (hadStaff) hooks.onLoggedOut();
+}
+
+// B2: menu dicht bij uitloggen.
+function closeHeaderMenu() {
+  const menu = $("header-more-menu");
+  const btn = $("header-more-btn");
+  if (menu) menu.classList.add("hidden");
+  if (btn) btn.setAttribute("aria-expanded", "false");
 }
 
 function bindUi() {
@@ -691,8 +825,8 @@ function bindUi() {
   on("staff-reset-form", "submit", onResetSubmit);
   on("staff-pin-forgot", "click", () => showStep("reset"));
   on("staff-code-forgot", "click", () => showStep("reset"));
-  on("staff-pin-other", "click", () => { pending = null; showStep("code", { notice: "Vul de startcode in die je van je leidinggevende hebt gekregen. Daarmee wordt dit toestel aan jou gekoppeld." }); });
-  on("staff-code-back", "click", () => { pending = null; showLoginStart(); });
+  on("staff-tab-login", "click", () => { if (!busy) { pending = null; showStep("pin"); } });
+  on("staff-tab-register", "click", () => { if (!busy) { pending = null; showStep("code"); } });
   on("staff-setup-back", "click", () => { pending = null; showStep("code"); });
   on("staff-reset-back", "click", () => showLoginStart());
   ["staff-pin-new", "staff-pin-confirm", "staff-pin-input"].forEach((id) => {
