@@ -19,8 +19,8 @@ import {
   deleteField
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { db, localDateKey, amsterdamDateKey, formatDate, formatDateTime } from "../shared.js";
-import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js";
-import { AUDIT_SETTINGS, LOCATION_PLACEHOLDER, DEFAULT_LOCATIONS, defaultAuditSections } from "./audit-defaults.js";
+import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js?v=28";
+import { AUDIT_SETTINGS, LOCATION_PLACEHOLDER, DEFAULT_LOCATIONS, defaultAuditSections } from "./audit-defaults.js?v=28";
 
 let ctx = null;
 let locationsDoc = null; // { items } of null (nog niet aangemaakt)
@@ -309,7 +309,8 @@ export async function restorePendingBy() {
 // ---------- Ruwe back-up ----------
 const BACKUP_COLLECTIONS = [
   "tasks", "taskMeta", "taskCompletions", "recurring", "employees", "employeeDetails", "reports",
-  "staffAccounts", "pinResetRequests", "staffDailyCounters", "settings", "auditConfig", "audits"
+  "staffAccounts", "pinResetRequests", "staffDailyCounters", "settings", "auditConfig", "audits",
+  "auditVariants" // V3A: audit-varianten
 ];
 
 function toPlain(value) {
@@ -345,8 +346,7 @@ export async function exportRawBackup() {
     const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
-    a.download = `zeiklijst-backup-${stamp}.json`;
+    a.download = `zeiklijst-backup-${amsterdamStamp()}.json`; // B14: Amsterdamse tijd, niet UTC
     document.body.append(a);
     a.click();
     a.remove();
@@ -359,6 +359,14 @@ export async function exportRawBackup() {
   } finally {
     exportBusy -= 1;
   }
+}
+
+// B14: "2026-11-23-07-44" in Europe/Amsterdam.
+export function amsterdamStamp(date = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Amsterdam", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(date).map((p) => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day}-${parts.hour}-${parts.minute}`;
 }
 
 // ---------- Excel-export (alleen-lezen, eigenaar 13:16) ----------
@@ -754,6 +762,14 @@ async function finishAudit() {
   ctx.showToast(`Audit afgerond: ${list.length} ${list.length === 1 ? "taak" : "taken"} aangemaakt.`, "ok");
   ctx.showSection("audits");
   renderV2();
+  // B15 (v3a): samenvatting met doorklik naar de taken van deze audit (PDF staat in de historie).
+  const tot = auditTotal({ ...finalDoc, id });
+  const pctText = tot && tot.total ? `${pct(tot.good, tot.total)}%` : "–";
+  const view = await ctx.confirmAction(
+    `Audit opgeslagen. Score ${pctText}, ${list.length} ${list.length === 1 ? "taak" : "taken"} aangemaakt, ${notesCount} ${notesCount === 1 ? "notitie" : "notities"}. De PDF staat bij deze audit in de historie.`,
+    { title: "Audit afgerond", confirmText: "Taken bekijken", cancelText: "Sluiten" }
+  );
+  if (view && list.length) ctx.showSection("taken", true, { filters: { status: "all", audit: id } });
 }
 
 // ---------- Audit: weergave ----------
@@ -1595,8 +1611,9 @@ function renderDashboardV2() {
   if (!root) return;
   const { dom } = ctx;
   const tasks = ctx.getTasks();
-  const urgent = tasks.filter((t) => t.urgent && t.status !== "afgerond");
-  const auditOpen = tasks.filter((t) => t.source && t.source.type === "audit" && t.status !== "afgerond");
+  // B9 (v3a): alleen echt open taken tellen; afgevinkt (ter controle) telt niet meer mee.
+  const urgent = tasks.filter((t) => t.urgent && t.status === "open");
+  const auditOpen = tasks.filter((t) => t.source && t.source.type === "audit" && t.status === "open");
   const setup = [];
   if (locationsReady && !locationsDoc) setup.push(dom`<button type="button" data-seed-locations>Locatielijst aanmaken</button>`);
   if (auditConfigReady && !auditConfig && locationsDoc) setup.push(dom`<button type="button" data-seed-config>Vragenlijst aanmaken</button>`);
@@ -1625,8 +1642,8 @@ function renderDashboardV2() {
   on("[data-seed-locations]", () => seedLocations());
   on("[data-seed-config]", () => seedAuditConfig());
   on("[data-goto-data]", () => ctx.showSection("data"));
-  on("[data-dash-urgent]", () => ctx.showSection("taken", true, { filters: { status: "all", urgent: "yes" } }));
-  on("[data-dash-audit-tasks]", () => ctx.showSection("taken", true, { filters: { status: "all", audit: "any" } }));
+  on("[data-dash-urgent]", () => ctx.showSection("taken", true, { filters: { status: "open", urgent: "yes" } }));
+  on("[data-dash-audit-tasks]", () => ctx.showSection("taken", true, { filters: { status: "open", audit: "any" } }));
   on("[data-dash-audit]", () => ctx.showSection(a || !last ? "audit" : "audits"));
 }
 

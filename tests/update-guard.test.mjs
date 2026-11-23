@@ -1,5 +1,5 @@
 // Unit-tests voor de auto-verversen-beslissingen. Draai: node tests/update-guard.test.mjs
-import { decideWaiting as w, decideReload as r, makeGuard, readGuard, RELOAD_GUARD_MS, RELOAD_GUARD_KEY } from "../admin/update-guard.js";
+import { decideWaiting as w, decideReload as r, makeGuard, readGuard, RELOAD_GUARD_MS, RELOAD_GUARD_KEY, isOwnController as own, isLoginBusy as lb } from "../admin/update-guard.js";
 const results = [];
 const t = (name, got, want) => results.push([got === want ? "PASS" : "FAIL", name, got === want ? "" : `${got} != ${want}`]);
 const now = 1_800_000_000_000;
@@ -15,6 +15,18 @@ t("controllerchange binnen 30 s na vorige herlaad -> niet herladen (geen lus)", 
 t("controllerchange na > 30 s -> herladen", r({ hadController: true, guard: readGuard(makeGuard(now - RELOAD_GUARD_MS - 1)), now }), "reload");
 t("kapotte guard telt als geen guard", readGuard("{kapot"), null);
 t("guard zonder flag telt als geen guard", readGuard('{"at":1}'), null);
+// V3A fix 15c + inlogformulier bezig
+t("15c: admin-SW is eigen controller", own("https://jordi-cyx.github.io/afdeling-takenlijst/admin/sw.js"), true);
+t("15c: admin-SW met query is eigen", own("http://127.0.0.1:8080/admin/sw.js?v=28"), true);
+t("15c: staff-SW (scope /) telt niet als eigen", own("https://jordi-cyx.github.io/afdeling-takenlijst/sw.js"), false);
+t("15c: geen controller telt niet", own(undefined), false);
+t("15c: lijkt-erop telt niet", own("https://x.test/admin/sw.js.bak"), false);
+t("15c: eerste bezoek /admin/ onder staff-SW -> niet herladen", r({ hadController: own("https://x.test/sw.js"), guard: null, now }), "none");
+t("login: leeg en geen focus -> niet bezig", lb({ loginVisible: true, emailValue: "", passwordValue: "", focused: false }), false);
+t("login: wachtwoord getypt -> bezig", lb({ loginVisible: true, emailValue: "", passwordValue: "x", focused: false }), true);
+t("login: e-mail ingevuld -> bezig", lb({ loginVisible: true, emailValue: "a@b", passwordValue: "", focused: false }), true);
+t("login: veld heeft focus -> bezig", lb({ loginVisible: true, emailValue: "", passwordValue: "", focused: true }), true);
+t("login: scherm verborgen -> niet bezig", lb({ loginVisible: false, emailValue: "a", passwordValue: "x", focused: true }), false);
 for (const x of results) console.log(x.join(" | "));
 const pass = results.filter((x) => x[0] === "PASS").length;
 console.log(`${pass}/${results.length} PASS`);

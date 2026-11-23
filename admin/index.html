@@ -29,14 +29,14 @@
   }
 }
   </script>
-  <script src="version.js?v=27"></script>
-  <link rel="manifest" href="manifest.webmanifest?v=27">
+  <script src="version.js?v=28"></script>
+  <link rel="manifest" href="manifest.webmanifest?v=28">
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=27">
   <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=27">
   <link rel="icon" href="favicon.ico?v=27" sizes="any">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=27">
-  <link rel="stylesheet" href="../styles.css?v=27">
-  <link rel="stylesheet" href="admin.css?v=27">
+  <link rel="stylesheet" href="../styles.css?v=28">
+  <link rel="stylesheet" href="admin.css?v=28">
 </head>
 <body>
   <header>
@@ -107,7 +107,10 @@
           E-mail
           <input type="email" id="login-email" autocomplete="username">
         </label>
-        <input type="password" id="login-password" placeholder="Wachtwoord" autocomplete="current-password" required>
+        <label>
+          Wachtwoord
+          <input type="password" id="login-password" placeholder="Wachtwoord" autocomplete="current-password" required>
+        </label>
         <p id="login-error" class="form-error hidden">Inloggen mislukt. Controleer e-mail en wachtwoord.</p>
         <div class="form-actions">
           <button type="submit">Inloggen</button>
@@ -347,6 +350,10 @@
 
       <details class="fold" data-fold="takenlijst" open>
         <summary class="fold-summary"><h3>Takenlijst</h3></summary>
+        <div id="filters-active" class="filters-active hidden" role="status">
+          <span id="filters-active-text">Filters actief</span>
+          <button type="button" id="filters-clear" class="secondary">Wis filters</button>
+        </div>
         <div id="task-list"></div>
       </details>
 
@@ -398,6 +405,7 @@
           <button type="button" id="migrate-dismiss" class="secondary">Niet nu</button>
         </div>
       </div>
+      <div id="maintenance-card" class="emp-dash-card maintenance-card"></div>
       <div id="data-v2"></div>
       <h3>Export / import (oud formaat)</h3>
       <p class="section-intro">Exporteer of importeer een back-up van taken, herhalingen en medewerkers. De export bevat ook de extra gegevens per medewerker (die worden niet geïmporteerd).</p>
@@ -497,6 +505,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=27"></script>
+  <script type="module" src="admin.js?v=28"></script>
 </body>
 </html>

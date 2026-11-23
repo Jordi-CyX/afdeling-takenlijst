@@ -23,7 +23,13 @@ export const firebaseConfig = {
 
 export const ADMIN_UID = "Of3mAU2qJeczN6NDUfkgT73kfJn1";
 
-export const app = initializeApp(firebaseConfig);
+// V3A: de admin-app (ZLA) zet vóór het laden self.ZEIKLIJST_FIREBASE_APP = "zla" (admin/version.js) en krijgt zo een
+// eigen Firebase-app: eigen inlog en eigen lokale cache, zodat ZL en ZLA in één browser elkaar niet uitloggen.
+// De medewerkers-app zet niets en blijft de standaard-app ("[DEFAULT]") gebruiken.
+const APP_NAME = (typeof self !== "undefined" && typeof self.ZEIKLIJST_FIREBASE_APP === "string" && /^[a-z]{2,10}$/.test(self.ZEIKLIJST_FIREBASE_APP))
+  ? self.ZEIKLIJST_FIREBASE_APP
+  : "";
+export const app = APP_NAME ? initializeApp(firebaseConfig, APP_NAME) : initializeApp(firebaseConfig);
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({
     tabManager: persistentMultipleTabManager()

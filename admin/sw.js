@@ -10,6 +10,8 @@ const ASSETS = [
   "./version.js",
   "./xlsx-export.js",
   "./update-guard.js",
+  "./v3a.js",
+  "./v3a-logic.js",
   "./admin.css",
   "./manifest.webmanifest",
   "./icons/icon-192.png",

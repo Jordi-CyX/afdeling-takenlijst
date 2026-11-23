@@ -50,6 +50,7 @@ import {
   renderV2,
   fillLocationSelect,
   activeLocations,
+  allLocations,
   locationLabelById,
   locationsAvailable,
   taskLocationText,
@@ -62,8 +63,10 @@ import {
   v2SubView,
   isV2Busy,
   saveDraftNow
-} from "./v2.js";
-import { decideWaiting, decideReload, makeGuard, readGuard, RELOAD_GUARD_KEY, UPDATE_CHECK_MS, UPDATE_BAR_TEXT } from "./update-guard.js";
+} from "./v2.js?v=28";
+import { initV3a, startV3aListeners, isV3aBusy, claimLine, claimDetailText, removeClaim } from "./v3a.js?v=28";
+import { makePathComparator, defaultTaskFilters, activeFilterCount, normalizeClaim, displayName } from "./v3a-logic.js?v=28";
+import { decideWaiting, decideReload, makeGuard, readGuard, RELOAD_GUARD_KEY, UPDATE_CHECK_MS, UPDATE_BAR_TEXT, isOwnController, isLoginBusy } from "./update-guard.js?v=28";
 
 let isAdmin = false;
 let tasks = [];
@@ -85,7 +88,9 @@ let migratingDueDates = false;
 let startCodes = [];
 let employeesReady = false;
 let swUpdateHandlerBound = false;
-let hadSwController = "serviceWorker" in navigator && Boolean(navigator.serviceWorker.controller);
+// Fix 15c: alleen de eigen admin-SW telt; de staff-SW (scope "/") kan /admin/ bij het eerste bezoek al besturen.
+let hadSwController = "serviceWorker" in navigator && Boolean(navigator.serviceWorker.controller)
+  && isOwnController(navigator.serviceWorker.controller.scriptURL);
 let swReg = null;
 let swUpdatePending = false;
 let formDirty = false;
@@ -418,8 +423,8 @@ function showDialog({ title, message, input = false, inputLabel = "Reden", input
   });
 }
 
-async function confirmAction(message, { title = "Bevestigen", confirmText = "Bevestigen", danger = false } = {}) {
-  const result = await showDialog({ title, message, confirmText, danger });
+async function confirmAction(message, { title = "Bevestigen", confirmText = "Bevestigen", cancelText = "Annuleren", danger = false } = {}) {
+  const result = await showDialog({ title, message, confirmText, cancelText, danger });
   return Boolean(result.ok);
 }
 
@@ -433,6 +438,8 @@ async function maybeGenerate() {
   generating = true;
   try {
     await generateDueInstances(templates, tasks);
+  } catch {
+    // B24: dubbele aanmaak door twee clients (already-exists) of offline is onschadelijk.
   } finally {
     generating = false;
   }
@@ -441,7 +448,9 @@ async function maybeGenerate() {
 function startListeners() {
   if (listenersStarted) return;
   listenersStarted = true;
-  listenCollection("tasks", normalizeTask, (list) => {
+  startV3aListeners();
+  // V3A: claim ("Ik pak deze op") naast de genormaliseerde taak (shared.js blijft ongewijzigd).
+  listenCollection("tasks", (id, d) => ({ ...normalizeTask(id, d), claim: normalizeClaim(d) }), (list) => {
     rawTasks = list;
     applyTaskMeta();
   });
@@ -1121,6 +1130,19 @@ function setupUi() {
     getTasks: () => tasks,
     getRawTasks: () => rawTasks
   });
+  initV3a({
+    dom,
+    showToast,
+    confirmAction,
+    safeWrite
+  });
+  const clearFilters = document.getElementById("filters-clear");
+  if (clearFilters) clearFilters.onclick = () => {
+    taskFilters = defaultTaskFilters();
+    syncFilterUi();
+    renderTasks();
+    renderCompleted();
+  };
   document.getElementById("recurrence-start").value = amsterdamDateKey(0);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkDateChange();
@@ -1146,8 +1168,22 @@ function trackFormDirty() {
   app.addEventListener("submit", () => setTimeout(() => { formDirty = false; }, 0), true);
 }
 
+function loginFormBusy() {
+  const screen = document.getElementById("login-screen");
+  const emailEl = document.getElementById("login-email");
+  const pwEl = document.getElementById("login-password");
+  return isLoginBusy({
+    loginVisible: Boolean(screen && !screen.classList.contains("hidden")),
+    emailValue: emailEl ? emailEl.value : "",
+    passwordValue: pwEl ? pwEl.value : "",
+    focused: Boolean(document.activeElement && (document.activeElement === emailEl || document.activeElement === pwEl))
+  });
+}
+
 function isAppBusy() {
   if (formDirty) return true;
+  if (loginFormBusy()) return true; // V3A: niet verversen terwijl het wachtwoord wordt getypt
+  if (isV3aBusy()) return true; // onderhoudstekst nog niet opgeslagen
   if (document.querySelector(".modal:not(.hidden), #app-dialog:not(.hidden), #image-lightbox:not(.hidden)")) return true;
   return isV2Busy();
 }
@@ -1382,7 +1418,10 @@ async function submitTaskForm(event) {
         else batch.delete(doc(db, "taskMeta", editingTaskId));
         await batch.commit();
       });
-      if (ok) resetTaskForm();
+      if (ok) {
+        resetTaskForm();
+        showToast("Taak opgeslagen.", "ok");
+      }
       return;
     }
 
@@ -1403,8 +1442,30 @@ async function submitTaskForm(event) {
         recurrence
       });
       assertDocSize(payload);
-      const ok = await safeWrite(() => updateDoc(doc(db, "recurring", editingTemplateId), payload));
-      if (ok) resetTaskForm();
+      // B20 (v3a): de open instantie van vandaag (nog niet afgevinkt) krijgt de wijziging direct mee.
+      const todayId = `${editingTemplateId}_${amsterdamDateKey(0)}`;
+      const todayTask = rawTasks.find((t) => t.id === todayId && t.status === "open");
+      const ok = await safeWrite(async () => {
+        const batch = writeBatch(db);
+        batch.update(doc(db, "recurring", editingTemplateId), payload);
+        if (todayTask) {
+          batch.update(doc(db, "tasks", todayId), {
+            title: payload.title,
+            description: payload.description,
+            assigneeId: payload.assigneeId || "",
+            assigneeName: payload.assigneeName || "",
+            location: payload.location || "",
+            locationId: payload.locationId || "",
+            urgent: payload.urgent === true,
+            photos: payload.photos || []
+          });
+        }
+        await batch.commit();
+      });
+      if (ok) {
+        resetTaskForm();
+        showToast(todayTask ? "Sjabloon opgeslagen; de taak van vandaag is ook bijgewerkt." : "Sjabloon opgeslagen.", "ok");
+      }
       return;
     }
 
@@ -1425,7 +1486,10 @@ async function submitTaskForm(event) {
       });
       assertDocSize(payload);
       const ok = await safeWrite(() => addDoc(collection(db, "recurring"), payload));
-      if (ok) resetTaskForm();
+      if (ok) {
+        resetTaskForm();
+        showToast("Sjabloon opgeslagen.", "ok");
+      }
       return;
     }
 
@@ -1450,7 +1514,10 @@ async function submitTaskForm(event) {
       if (dueDate) batch.set(doc(db, "taskMeta", ref.id), { dueDate });
       await batch.commit();
     });
-    if (ok) resetTaskForm();
+    if (ok) {
+      resetTaskForm();
+      showToast("Taak opgeslagen.", "ok");
+    }
   } catch (err) {
     showToast(err.message || "Opslaan mislukt.");
   }
@@ -1631,7 +1698,8 @@ function showSection(name, persist = true, options = {}) {
   currentSection = section;
   if (persist) localStorage.setItem(SECTION_KEY, section);
   if (options.filters) {
-    taskFilters = { ...taskFilters, ...options.filters };
+    // B1 (v3a): doorklikken begint met de standaardfilters; alleen het doelfilter wordt gezet.
+    taskFilters = { ...defaultTaskFilters(), ...options.filters };
     syncFilterUi();
   }
   document.querySelectorAll(".admin-section").forEach((el) => {
@@ -1783,8 +1851,9 @@ function renderDashboard() {
   bindTaskItems(pendingBox);
 }
 
+// B19 (v3a): de huidige naam via createdByEmployeeId, met createdByName als fallback.
 function staffCreatorLabel(task) {
-  return (task.createdByName || "").trim() || "medewerker";
+  return displayName(task.createdByEmployeeId, task.createdByName, employees) || "medewerker";
 }
 
 function renderStaffCreated() {
@@ -2082,6 +2151,7 @@ function taskItem(task) {
           ${dueDateLabel(task)}
           ${task.source ? dom`<div class="task-source">${sourceText(task)}</div>` : ""}
           ${isStaffCreatedTask(task) ? dom`<div class="task-created-by">Door ${staffCreatorLabel(task)} aangemaakt</div>` : ""}
+          ${task.status === "open" ? claimLine(task, employees) : ""}
           ${task.status !== "open" && task.doneBy ? dom`<div class="task-done-by">Afgevinkt door ${task.doneBy}${task.doneAt ? `, ${formatDateTime(task.doneAt)}` : ""}</div>` : ""}
         </div>
         <div class="badge-row">${task.urgent ? dom`<span class="badge urgent">Spoed</span>` : ""}${isRecurring(task) ? dom`<span class="badge recurring">Herhalend</span>` : ""}<span class="badge ${status}">${label}</span>${isOverdue(task) ? dom`<span class="badge overdue">Verstreken</span>` : ""}</div>
@@ -2194,16 +2264,32 @@ function syncFilterUi() {
 
 function renderTasks() {
   const list = document.getElementById("task-list");
-  // Build v2: spoed altijd bovenaan.
+  renderFiltersActive();
+  // V3A: padvolgorde (items[].order), binnen een pad eerst spoed, dan streefdatum (leeg achteraan).
   const active = tasks
     .filter((task) => taskMatchesFilters(task, false))
-    .sort((a, b) => (Number(b.urgent) - Number(a.urgent)) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    .sort(pathComparator());
   if (!active.length) {
     list.innerHTML = '<p class="empty-state">Geen taken die aan de filters voldoen.</p>';
     return;
   }
   list.replaceChildren(...active.map(taskItem));
   bindTaskItems(list);
+}
+
+function pathComparator() {
+  const order = new Map(allLocations().map((l) => [l.id, Number(l.order)]));
+  return makePathComparator((id) => (order.has(id) ? order.get(id) : null));
+}
+
+// B1: balk "Filters actief · Wis filters" boven de takenlijst.
+function renderFiltersActive() {
+  const bar = document.getElementById("filters-active");
+  if (!bar) return;
+  const n = activeFilterCount(taskFilters);
+  bar.classList.toggle("hidden", n === 0);
+  const text = document.getElementById("filters-active-text");
+  if (text) text.textContent = n === 1 ? "1 filter actief" : `${n} filters actief`;
 }
 
 function renderCompleted() {
@@ -2368,7 +2454,11 @@ async function seedEmployees() {
     showToast("Standaardlijst stond er al in.", "ok");
     return;
   }
-  await safeWrite(() => batch.commit());
+  // B12 (v3a): eerst bevestigen met het aantal.
+  const confirmed = await confirmAction(`${writes} ${writes === 1 ? "medewerker" : "medewerkers"} uit de standaardlijst toevoegen?`, { title: "Standaardlijst vullen", confirmText: "Toevoegen" });
+  if (!confirmed) return;
+  const ok = await safeWrite(() => batch.commit());
+  if (ok) showToast(`${writes} ${writes === 1 ? "medewerker" : "medewerkers"} toegevoegd.`, "ok");
 }
 
 async function renameEmployee(id) {
@@ -2450,9 +2540,21 @@ async function toggleEmployee(id) {
 async function removeEmployee(id) {
   const emp = employees.find((e) => e.id === id);
   if (!emp) return;
-  const ok = await confirmAction(`Medewerker ${emp.name} verwijderen? Bestaande taken blijven bewaard.`, { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
+  // B22 (v3a): open/afgevinkte taken van deze medewerker vrijgeven aan Allen (anders kan niemand ze afvinken).
+  const own = tasks.filter((t) => t.assigneeId === id && (t.status === "open" || t.status === "pending"));
+  const ownTpl = templates.filter((t) => t.assigneeId === id);
+  const extra = own.length || ownTpl.length
+    ? ` ${own.length} open ${own.length === 1 ? "taak" : "taken"}${ownTpl.length ? ` en ${ownTpl.length} ${ownTpl.length === 1 ? "herhaling" : "herhalingen"}` : ""} gaan naar Allen, zodat iedereen ze kan afvinken.`
+    : "";
+  const ok = await confirmAction(`Medewerker ${emp.name} verwijderen? Bestaande taken blijven bewaard.${extra}`, { title: "Verwijderen", confirmText: "Verwijderen", danger: true });
   if (!ok) return;
   await safeWrite(async () => {
+    const refs = [...own.map((t) => doc(db, "tasks", t.id)), ...ownTpl.map((t) => doc(db, "recurring", t.id))];
+    for (let i = 0; i < refs.length; i += 400) {
+      const b = writeBatch(db);
+      for (const ref of refs.slice(i, i + 400)) b.update(ref, { assigneeId: "ALLEN", assigneeName: "Allen" });
+      await b.commit();
+    }
     const batch = writeBatch(db);
     batch.delete(doc(db, "employees", id));
     if (employeeDetails.has(id)) batch.delete(doc(db, "employeeDetails", id));
@@ -2480,7 +2582,8 @@ function openTask(id) {
   if (task.urgent) statusBadges.unshift(dom`<span class="badge urgent">Spoed</span>`);
   if (isRecurring(task)) statusBadges.push(dom`<span class="badge recurring">Herhalend</span>`);
   if (isOverdue(task)) statusBadges.push(dom`<span class="badge overdue">Verstreken</span>`);
-  if (task.rejectedCount || task.lastRejectedAt || (Array.isArray(task.rejections) && task.rejections.length)) {
+  // B10 (v3a): "Afgewezen" alleen zolang de taak nog niet is goedgekeurd.
+  if (task.status !== "afgerond" && (task.rejectedCount || task.lastRejectedAt || (Array.isArray(task.rejections) && task.rejections.length))) {
     statusBadges.push(dom`<span class="badge paused">Afgewezen</span>`);
   }
   document.getElementById("modal-status").replaceChildren(...statusBadges);
@@ -2499,6 +2602,7 @@ function openTask(id) {
     extra.push(`Afgevinkt${task.doneBy ? " door " + task.doneBy : ""}${task.doneAt ? " op " + formatDateTime(task.doneAt) : ""}`);
   }
   if (task.completedAt) extra.push(`Goedgekeurd op ${formatDateTime(task.completedAt)}`);
+  if (task.claim) extra.push(claimDetailText(task, employees));
   document.getElementById("modal-description").replaceChildren(dom`
     <p class="pre-line">${task.description || ""}</p>
     ${extra.length ? dom`<div class="task-meta pre-line">${extra.join("\n")}</div>` : ""}`);
@@ -2535,7 +2639,10 @@ function openTask(id) {
   if (task.status === "afgerond") {
     actions.innerHTML += `<button type="button" class="secondary" data-action="reopen">Terugzetten naar open</button>`;
   }
+  if (task.claim) actions.innerHTML += `<button type="button" class="secondary" data-action="unclaim">Claim weghalen</button>`;
   actions.innerHTML += `<button type="button" class="danger" data-action="delete">Verwijderen</button>`;
+  const unclaimBtn = actions.querySelector('[data-action="unclaim"]');
+  if (unclaimBtn) unclaimBtn.onclick = async () => { if (await removeClaim(task)) closeModal(); };
   const editBtn = actions.querySelector('[data-action="edit"]');
   const pendingBtn = actions.querySelector('[data-action="pending"]');
   const approveBtn = actions.querySelector('[data-action="approve"]');
@@ -2854,6 +2961,12 @@ async function importData(event) {
       } else {
         throw new Error("Ongeldig bestand");
       }
+      // B13 (v3a): eerst een samenvatting tonen.
+      const go = await confirmAction(
+        `${taskList.length} ${taskList.length === 1 ? "taak" : "taken"}, ${tpls.length} ${tpls.length === 1 ? "herhaling" : "herhalingen"} en ${emps.length} ${emps.length === 1 ? "medewerker" : "medewerkers"} importeren? Bestaande items met hetzelfde id worden overschreven.`,
+        { title: "Importeren", confirmText: "Importeren" }
+      );
+      if (!go) return;
       await writeAll(tpls, taskList);
       if (emps.length) {
         const batch = writeBatch(db);

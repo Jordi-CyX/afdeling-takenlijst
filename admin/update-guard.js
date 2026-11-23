@@ -34,3 +34,19 @@ export function readGuard(raw) {
     return null;
   }
 }
+
+// V3A (fix 15c): de pagina /admin/ kan bij het eerste bezoek al door de staff-SW (scope "/") worden bestuurd.
+// Alleen een controller met scriptURL op /admin/sw.js telt als "eigen"; anders geldt het als eerste installatie
+// van de admin-SW en wordt er niet herladen.
+export function isOwnController(scriptURL) {
+  if (typeof scriptURL !== "string" || !scriptURL) return false;
+  let path = scriptURL;
+  try { path = new URL(scriptURL).pathname; } catch { path = scriptURL.split(/[?#]/)[0]; }
+  return /\/admin\/sw\.js$/.test(path);
+}
+
+// V3A: het inlogformulier telt als "bezig" zodra er iets is ingevuld of een veld focus heeft.
+export function isLoginBusy({ loginVisible, emailValue, passwordValue, focused }) {
+  if (!loginVisible) return false;
+  return Boolean(focused) || Boolean(String(emailValue || "").length) || Boolean(String(passwordValue || "").length);
+}
