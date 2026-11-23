@@ -2,7 +2,7 @@
 // The counters in Firestore are leading; this module only pre-checks with the
 // server copy and builds the exact batches the rules require.
 import { getDocFromServer, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
-import { db, doc, collection, writeBatch } from "./shared.js?v=22";
+import { db, doc, collection, writeBatch } from "./shared.js?v=23";
 
 // Contract §1 – must equal the rules exactly.
 export const MAX_TASKS_PER_DAY = 10;
