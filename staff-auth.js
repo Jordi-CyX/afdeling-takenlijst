@@ -25,8 +25,8 @@ import {
   formatStartCode,
   isValidStartCode,
   normalizeName
-} from "./shared.js?v=22";
-import { sendResetRequest } from "./limits.js?v=22";
+} from "./shared.js?v=23";
+import { sendResetRequest } from "./limits.js?v=23";
 
 // Login model: ZLA contract zla-step3-status.md (audit H1/M1/M2).
 // - Claim (first time, new device, after reset): ONLY the start code.
@@ -422,7 +422,7 @@ function renderHeaderUser() {
     menu.textContent = name ? `Ingelogd als ${name}` : "";
     menu.classList.toggle("hidden", !name);
   }
-  ["logout-menu-btn", "report-menu-btn"].forEach((id) => {
+  ["logout-btn", "report-menu-btn"].forEach((id) => {
     const btn = $(id);
     if (btn) btn.classList.toggle("hidden", !currentStaff);
   });
@@ -835,7 +835,7 @@ function bindUi() {
   });
   const codeInput = $("staff-code-input");
   if (codeInput) startCodeInput(codeInput);
-  on("logout-menu-btn", "click", () => { logoutStaff(); });
+  on("logout-btn", "click", () => { logoutStaff(); });
 }
 
 export function initStaffAuth(options) {

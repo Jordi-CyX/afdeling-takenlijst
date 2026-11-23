@@ -13,7 +13,7 @@ import {
   normalizeName,
   compressImage,
   isSafeImageDataUrl
-} from "./shared.js?v=22";
+} from "./shared.js?v=23";
 import { serverTimestamp, onSnapshot, deleteField, query, where, getDoc, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { auth } from "./firebase-init.js";
 import {
@@ -21,9 +21,9 @@ import {
   initStaffAuth,
   logoutStaff,
   setStaffDisplayName
-} from "./staff-auth.js?v=22";
-import { sendWithStaffCounter } from "./limits.js?v=22";
-import { sortTasks, isVisibleForDepartment, locationDepartment, normalizeDepartment } from "./task-order.js?v=22";
+} from "./staff-auth.js?v=23";
+import { sendWithStaffCounter } from "./limits.js?v=23";
+import { sortTasks, isVisibleForDepartment, locationDepartment, normalizeDepartment } from "./task-order.js?v=23";
 
 // v3b: afdelingen en schakelknop aan; sessies blijven uit (geen reads/writes/listeners naar staffSessions).
 const FEATURES = Object.freeze({ departments: true, sessions: false, adminSwitch: true });
@@ -103,7 +103,7 @@ const REPORT = {
 };
 
 function appVersion() {
-  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v22";
+  return (typeof self !== "undefined" && self.APP_CACHE_NAME) || "zeiklijst-v23";
 }
 
 // Visible label from the cache name, e.g. "zeiklijst-v20" -> "v20".
