@@ -553,6 +553,50 @@ await t("admin", "admin: startcode-uitgifte-batch slaagt", async () => {
 });
 await t("admin", "admin: taak met dueDate in taskMeta + taak bijwerken slaagt", async () => { const db = env.authenticatedContext(ADMIN).firestore(); const b = db.batch(); b.update(db.doc("tasks/t1"), { title: "Nieuw" }); b.set(db.doc("taskMeta/t1"), { dueDate: ymd(2) }); await assertSucceeds(b.commit()); });
 
+// --- V3A (admin v28): onderhoud en "Ik pak deze op" ---
+const UN = () => env.unauthenticatedContext().firestore();
+const maint = (over = {}) => ({ enabled: true, message: "Even onderhoud", updatedAt: ST(), ...over });
+await t("v3a-onderhoud", "zonder login: settings/maintenance lezen slaagt", async () => { await seedDoc("settings/maintenance", { enabled: false, updatedAt: TS.now() }); await assertSucceeds(UN().doc("settings/maintenance").get()); });
+await t("v3a-onderhoud", "zonder login: niet-bestaand onderhoudsdoc lezen slaagt", () => assertSucceeds(UN().doc("settings/maintenance").get()));
+await t("v3a-onderhoud", "anoniem en medewerker: onderhoud lezen slaagt", async () => { await assertSucceeds(anonCtx().doc("settings/maintenance").get()); await assertSucceeds(S().doc("settings/maintenance").get()); });
+await t("v3a-onderhoud", "zonder login: settings/locations lezen faalt", () => assertFails(UN().doc("settings/locations").get()));
+await t("v3a-onderhoud", "zonder login: settings lijst faalt", () => assertFails(UN().collection("settings").get()));
+await t("v3a-onderhoud", "admin: onderhoud aan met tekst slaagt", () => assertSucceeds(A().doc("settings/maintenance").set(maint())));
+await t("v3a-onderhoud", "admin: onderhoud uit zonder tekst slaagt", () => assertSucceeds(A().doc("settings/maintenance").set({ enabled: false, updatedAt: ST() })));
+await t("v3a-onderhoud", "admin: tekst van 300 tekens slaagt", () => assertSucceeds(A().doc("settings/maintenance").set(maint({ message: "x".repeat(300) }))));
+await t("v3a-onderhoud", "admin: tekst van 301 tekens faalt", () => assertFails(A().doc("settings/maintenance").set(maint({ message: "x".repeat(301) }))));
+await t("v3a-onderhoud", "admin: enabled geen bool faalt", () => assertFails(A().doc("settings/maintenance").set(maint({ enabled: "ja" }))));
+await t("v3a-onderhoud", "admin: extra veld faalt", () => assertFails(A().doc("settings/maintenance").set(maint({ by: "x" }))));
+await t("v3a-onderhoud", "admin: updatedAt geen servertijd faalt", () => assertFails(A().doc("settings/maintenance").set(maint({ updatedAt: TS.now() }))));
+await t("v3a-onderhoud", "medewerker/anoniem: onderhoud schrijven faalt", async () => { await assertFails(S().doc("settings/maintenance").set(maint())); await assertFails(anonCtx().doc("settings/maintenance").set(maint())); await assertFails(UN().doc("settings/maintenance").set(maint())); });
+await t("v3a-onderhoud", "admin: ander settings-doc faalt nog steeds", () => assertFails(A().doc("settings/iets").set({ enabled: true, updatedAt: ST() })));
+
+const myClaim = () => ({ claimedBy: { employeeId: "emp-staff", name: "Staff" }, claimedAt: ST() });
+const aartClaim = { claimedBy: { employeeId: "emp-aart", name: "Aart" }, claimedAt: TS.now() };
+await t("v3a-claim", "medewerker: niet-toegewezen taak oppakken slaagt", () => assertSucceeds(S().doc("tasks/t1").update(myClaim())));
+await t("v3a-claim", "medewerker: taak voor Allen oppakken slaagt", () => assertSucceeds(S().doc("tasks/t-allen").update(myClaim())));
+await t("v3a-claim", "medewerker: eigen taak oppakken slaagt", () => assertSucceeds(S().doc("tasks/t-own").update(myClaim())));
+await t("v3a-claim", "medewerker: taak van collega oppakken faalt", () => assertFails(S().doc("tasks/t-jane").update(myClaim())));
+await t("v3a-claim", "medewerker: claim op naam van collega faalt", () => assertFails(S().doc("tasks/t1").update({ claimedBy: { employeeId: "emp-aart", name: "Aart" }, claimedAt: ST() })));
+await t("v3a-claim", "medewerker: claim met andere naam faalt", () => assertFails(S().doc("tasks/t1").update({ claimedBy: { employeeId: "emp-staff", name: "Iemand" }, claimedAt: ST() })));
+await t("v3a-claim", "medewerker: claim met eigen klok faalt", () => assertFails(S().doc("tasks/t1").update({ ...myClaim(), claimedAt: TS.now() })));
+await t("v3a-claim", "medewerker: claim + titel wijzigen faalt", () => assertFails(S().doc("tasks/t1").update({ ...myClaim(), title: "Anders" })));
+await t("v3a-claim", "medewerker: taak die een ander al oppakte overnemen faalt", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("tasks/t1").update(aartClaim)); await assertFails(S().doc("tasks/t1").update(myClaim())); });
+await t("v3a-claim", "medewerker: claim op afgevinkte (pending) taak faalt", () => assertFails(S().doc("tasks/t-pending-new").update(myClaim())));
+await t("v3a-claim", "medewerker: eigen claim loslaten (deleteField) slaagt", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("tasks/t1").update({ claimedBy: { employeeId: "emp-staff", name: "Staff" }, claimedAt: TS.now() })); await assertSucceeds(S().doc("tasks/t1").update({ claimedBy: firebase.firestore.FieldValue.delete(), claimedAt: firebase.firestore.FieldValue.delete() })); });
+await t("v3a-claim", "medewerker: eigen claim loslaten (null) slaagt", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("tasks/t1").update({ claimedBy: { employeeId: "emp-staff", name: "Staff" }, claimedAt: TS.now() })); await assertSucceeds(S().doc("tasks/t1").update({ claimedBy: null, claimedAt: null })); });
+await t("v3a-claim", "medewerker: claim van collega weghalen faalt", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("tasks/t1").update(aartClaim)); await assertFails(S().doc("tasks/t1").update({ claimedBy: null, claimedAt: null })); });
+await t("v3a-claim", "medewerker: opgepakte taak afvinken slaagt (claim blijft staan)", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("tasks/t-allen").update({ claimedBy: { employeeId: "emp-staff", name: "Staff" }, claimedAt: TS.now() })); await assertSucceeds(tickB(S(), "t-allen")); });
+await t("v3a-claim", "anoniem/reader: oppakken faalt", async () => { await assertFails(anonCtx().doc("tasks/t1").update(myClaim())); await assertFails(RD().doc("tasks/t1").update(myClaim())); });
+await t("v3a-claim", "admin: claim weghalen slaagt", async () => { await env.withSecurityRulesDisabled((c) => c.firestore().doc("tasks/t1").update(aartClaim)); await assertSucceeds(A().doc("tasks/t1").update({ claimedBy: firebase.firestore.FieldValue.delete(), claimedAt: firebase.firestore.FieldValue.delete() })); });
+await t("v3a-claim", "admin: geldige claim zetten slaagt", () => assertSucceeds(A().doc("tasks/t1").update({ claimedBy: { employeeId: "emp-aart", name: "Aart" }, claimedAt: ST() })));
+await t("v3a-claim", "admin: claim met verkeerde vorm faalt", () => assertFails(A().doc("tasks/t1").update({ claimedBy: "Aart", claimedAt: ST() })));
+await t("v3a-claim", "herhaal-instantie met claimedBy aanmaken faalt", () => assertFails(S().doc(`tasks/rec1_${ymd()}`).set(instance(ymd(), { claimedBy: { employeeId: "emp-staff", name: "Staff" } }))));
+await t("v3a-herstel", "admin: herstel v2-taak met claim + v25-taak zonder nieuwe velden slaagt", async () => {
+  await assertSucceeds(A().doc("tasks/rs-1").set({ title: "Oud", description: "", assignee: "", status: "open", createdAt: iso(-3), photos: [], location: "Ergens" }));
+  await assertSucceeds(A().doc("tasks/rs-2").set({ title: "V3", description: "", assigneeId: "ALLEN", assigneeName: "Allen", status: "open", createdAt: iso(-1), photos: [], locationId: "pad-16", location: "Pad 16", urgent: false, claimedBy: { employeeId: "emp-aart", name: "Aart" }, claimedAt: TS.now() }));
+});
+
 await env.cleanup();
 for (const r of results) console.log(r.join(" | "));
 const pass = results.filter((r) => r[0] === "PASS").length;

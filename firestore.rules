@@ -30,6 +30,10 @@
 // - taskCompletions/{taskId}: wie afvinkte en wanneer (alleen admin leest alles; medewerker alleen
 //   het eigen doc; reader niets). Afvinken schrijft geen naam/tijd meer op de taak zelf.
 // - auditConfig (alleen admin), audits (admin schrijft, admin + reader lezen), reader leest reports.
+// V3A DEEL 1 (23-11-2026, admin v28) – zie zla-v3a-data-afspraak.md
+// - settings/maintenance = {enabled, message <= 300, updatedAt}: lezen door iedereen (ook zonder login), schrijven admin.
+// - tasks: claimedBy {employeeId, name} + claimedAt. Medewerker zet alleen zichzelf (open taak, niet door een ander
+//   opgepakt) of haalt de eigen claim weg; de admin mag de claim zetten of weghalen.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -351,7 +355,45 @@ service cloud.firestore {
       let d = request.resource.data;
       return (!("urgent" in d) || d.urgent is bool)
         && (!("source" in d) || isValidSource(d.source))
-        && (!("locationId" in d) || isLocationIdFormat(d.locationId));
+        && (!("locationId" in d) || isLocationIdFormat(d.locationId))
+        && (!("claimedBy" in d) || d.claimedBy == null || isValidClaimShape(d.claimedBy))
+        && (!("claimedAt" in d) || d.claimedAt == null || d.claimedAt is timestamp);
+    }
+
+    // V3A: "Ik pak deze op". claimedBy = {employeeId, name}, claimedAt = servertijd.
+    function isValidClaimShape(c) {
+      return c is map
+        && c.keys().hasOnly(["employeeId", "name"])
+        && c.keys().hasAll(["employeeId", "name"])
+        && c.employeeId is string
+        && c.employeeId.size() <= 60
+        && c.name is string
+        && c.name.size() <= 60;
+    }
+
+    function currentClaimEmployeeId() {
+      return (("claimedBy" in resource.data) && resource.data.claimedBy is map)
+        ? resource.data.claimedBy.get("employeeId", null) : null;
+    }
+
+    // Medewerker: zichzelf zetten (open taak, nog niet door een ander opgepakt) of de eigen claim weghalen.
+    function isClaimToggle() {
+      let d = request.resource.data;
+      return isOwnOrSharedTask()
+        && d.diff(resource.data).affectedKeys().hasOnly(["claimedBy", "claimedAt"])
+        && (
+          (
+            resource.data.status == "open"
+            && currentClaimEmployeeId() in [null, staffEmployeeId()]
+            && d.claimedBy == {"employeeId": staffEmployeeId(), "name": staffEmployee().name}
+            && d.claimedAt == request.time
+          )
+          || (
+            currentClaimEmployeeId() == staffEmployeeId()
+            && isNullOrMissing(d, "claimedBy")
+            && isNullOrMissing(d, "claimedAt")
+          )
+        );
     }
 
     match /tasks/{taskId} {
@@ -359,7 +401,9 @@ service cloud.firestore {
       allow create: if (isAdmin() && hasValidAdminTaskFields())
         || (isValidStaff() && isValidRecurringInstance(taskId))
         || (isValidStaff() && isValidStaffTaskCreate() && counterBumpedFor("task", taskId));
-      allow update: if (isAdmin() && hasValidAdminTaskFields()) || (isValidStaff() && isStatusToggle(taskId));
+      allow update: if (isAdmin() && hasValidAdminTaskFields())
+        || (isValidStaff() && isStatusToggle(taskId))
+        || (isValidStaff() && isClaimToggle());
       allow delete: if isAdmin();
     }
 
@@ -408,10 +452,24 @@ service cloud.firestore {
         && d.updatedAt == request.time;
     }
 
+    // V3A: settings/maintenance = {enabled, message (<= 300, optioneel), updatedAt}.
+    function isValidMaintenanceDoc() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(["enabled", "message", "updatedAt"])
+        && d.keys().hasAll(["enabled", "updatedAt"])
+        && d.enabled is bool
+        && (!("message" in d) || (d.message is string && d.message.size() <= 300))
+        && d.updatedAt == request.time;
+    }
+
     match /settings/{docId} {
-      allow get: if docId == "locations" && (isAdmin() || isValidStaff());
+      // V3A: het onderhoudsdoc is voor iedereen leesbaar, ook vóór het inloggen.
+      allow get: if docId == "maintenance" || (docId == "locations" && (isAdmin() || isValidStaff()));
       allow list, delete: if isAdmin();
-      allow create, update: if isAdmin() && docId == "locations" && isValidLocationsDoc();
+      allow create, update: if isAdmin() && (
+        (docId == "locations" && isValidLocationsDoc())
+        || (docId == "maintenance" && isValidMaintenanceDoc())
+      );
     }
 
     // Build v2: vragenlijst en ronde (alleen admin). De diepe validatie doet de admin-app.
