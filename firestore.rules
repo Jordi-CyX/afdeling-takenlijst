@@ -37,6 +37,12 @@
 // - auditVariants/{variantId} = {name, compare, active?, order?, version, sections, createdAt?, updatedAt}: alleen admin.
 //   auditConfig/current blijft bestaan (wordt de eerste variant "standaard"; zonder migratie leest de admin-app hem nog).
 // - audits: optioneel variantId, variantName, compare (bool) en ranBy (wie liep); admin mag audits verwijderen.
+// V3B (23-11-2026, admin v29) – zie zla-v3b-data-afspraak.md
+// - settings/locations: optionele map departments {locationId: "sanitair"|"tegels"|"beide"}; items[].department
+//   houdt de admin-app gelijk. Zonder departments blijft alles zichtbaar (en blijft een oude back-up terug te zetten).
+// - staffProfiles/{employeeId} = {department?, canAdmin?, updatedAt}: admin schrijft; de medewerker leest alleen
+//   het eigen doc (get, geldige staff-sessie); de reader niets. canAdmin geeft GEEN rechten: alleen de knop naar ZLA,
+//   die zelf om de admin-login vraagt.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -445,13 +451,16 @@ service cloud.firestore {
     // De admin-app houdt items en labels gelijk (regels kunnen een lijst van maps niet doorlopen).
     function isValidLocationsDoc() {
       let d = request.resource.data;
-      return d.keys().hasOnly(["items", "labels", "updatedAt"])
+      return d.keys().hasOnly(["items", "labels", "departments", "updatedAt"])
         && d.keys().hasAll(["items", "labels", "updatedAt"])
         && d.items is list
         && d.items.size() >= 1
         && d.items.size() <= 50
         && d.labels is map
         && d.labels.size() <= 50
+        && (!("departments" in d) || (d.departments is map
+          && d.departments.size() <= 50
+          && d.departments.values().toSet().hasOnly(["sanitair", "tegels", "beide"])))
         && d.updatedAt == request.time;
     }
 
@@ -576,6 +585,23 @@ service cloud.firestore {
       allow get: if isAdmin() || isReader() || isOwnEmployeeDoc(employeeId);
       allow list: if isAdmin() || isReader();
       allow create, update, delete: if isAdmin();
+    }
+
+    // V3B: afdeling en adminknop per medewerker. Niet in employees/ (de reader leest die allemaal).
+    function isValidStaffProfile(employeeId) {
+      let d = request.resource.data;
+      return exists(/databases/$(database)/documents/employees/$(employeeId))
+        && d.keys().hasOnly(["department", "canAdmin", "updatedAt"])
+        && d.keys().hasAll(["updatedAt"])
+        && (!("canAdmin" in d) || d.canAdmin is bool)
+        && (!("department" in d) || d.department in ["sanitair", "tegels", "beide"])
+        && d.updatedAt == request.time;
+    }
+
+    match /staffProfiles/{employeeId} {
+      allow get: if isAdmin() || (isValidStaff() && staffEmployeeId() == employeeId);
+      allow list, delete: if isAdmin();
+      allow create, update: if isAdmin() && isValidStaffProfile(employeeId);
     }
 
     // Admin v24: extra gegevens per medewerker. Alleen admin (niet staff, niet de reader),
