@@ -31,7 +31,7 @@ for (const f of ["version.js", "admin.js", "admin.css", "manifest.webmanifest"])
   const m = html.match(new RegExp(`${f.replace(".", "\\.")}\\?v=(\\d+)`));
   if (m || f !== "manifest.webmanifest") ok(`index.html: ${f}?v=${version}`, m && Number(m[1]) === version, m ? `v=${m[1]}` : "niet gevonden");
 }
-const own = ["admin.js", "v2.js", "v3a.js"];
+const own = ["admin.js", "v2.js", "v3a.js", "v3b.js"];
 for (const f of own) {
   const src = read(`admin/${f}`);
   const bad = [...src.matchAll(/from\s+"\.\/([a-z0-9-]+\.js)(\?v=(\d+))?"/g)].filter((m) => Number(m[3]) !== version).map((m) => m[1] + (m[2] || ""));
@@ -39,7 +39,7 @@ for (const f of own) {
 }
 const sw = read("admin/sw.js");
 const assets = [...(sw.match(/ASSETS\s*=\s*\[([\s\S]*?)\]/) || ["", ""])[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-const needed = ["./v2.js", "./v3a.js", "./v3a-logic.js", "./update-guard.js", "./xlsx-export.js", "./audit-defaults.js"];
+const needed = ["./v2.js", "./v3a.js", "./v3a-logic.js", "./v3b.js", "./v3b-logic.js", "./update-guard.js", "./xlsx-export.js", "./audit-defaults.js"];
 ok("sw.js ASSETS bevat alle admin-modules", needed.every((n) => assets.some((a) => a.split("?")[0] === n)), needed.filter((n) => !assets.some((a) => a.split("?")[0] === n)).join(", "));
 
 if (has("run-tests")) {

@@ -1235,3 +1235,14 @@ header .update-bar.hidden { display: none; }
 .print-table tr.dev td:first-child { font-weight: 700; }
 .print-compare tr.declining td { font-weight: 700; }
 .print-meta th { width: 30%; }
+
+/* ---- V3B (admin v29): afdelingen + knop terug naar ZL ---- */
+.loc-dept { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; }
+.loc-dept select { width: auto; }
+.loc-dept-bar { display: grid; gap: 0.4rem; margin-bottom: 0.6rem; }
+.emp-profile-form { display: grid; gap: 0.5rem; }
+.employee-profile { margin: 0.15rem 0 0; }
+.nav-menu .nav-zl { display: block; padding: 0.6rem 0.9rem; color: inherit; text-decoration: none; font-weight: 600; border-top: 1px solid rgba(0, 0, 0, 0.1); }
+.nav-menu .nav-zl:hover, .nav-menu .nav-zl:focus-visible { text-decoration: underline; }
+.login-zl { margin-top: 0.8rem; text-align: center; }
+.login-zl a { font-weight: 600; }

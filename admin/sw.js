@@ -12,6 +12,8 @@ const ASSETS = [
   "./update-guard.js",
   "./v3a.js",
   "./v3a-logic.js",
+  "./v3b.js",
+  "./v3b-logic.js",
   "./admin.css",
   "./manifest.webmanifest",
   "./icons/icon-192.png",

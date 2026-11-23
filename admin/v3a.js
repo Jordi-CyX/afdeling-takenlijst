@@ -9,7 +9,7 @@ import {
   deleteField
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { db, formatDateTime } from "../shared.js";
-import { cleanMaintenanceMessage, MAINTENANCE_MAX, displayName } from "./v3a-logic.js?v=28";
+import { cleanMaintenanceMessage, MAINTENANCE_MAX, displayName } from "./v3a-logic.js?v=29";
 
 let ctx = null;
 let maintenance = null; // { enabled, message, updatedAt } of null

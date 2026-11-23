@@ -63,10 +63,11 @@ import {
   v2SubView,
   isV2Busy,
   saveDraftNow
-} from "./v2.js?v=28";
-import { initV3a, startV3aListeners, isV3aBusy, claimLine, claimDetailText, removeClaim } from "./v3a.js?v=28";
-import { makePathComparator, defaultTaskFilters, activeFilterCount, normalizeClaim, displayName } from "./v3a-logic.js?v=28";
-import { decideWaiting, decideReload, makeGuard, readGuard, RELOAD_GUARD_KEY, UPDATE_CHECK_MS, UPDATE_BAR_TEXT, isOwnController, isLoginBusy } from "./update-guard.js?v=28";
+} from "./v2.js?v=29";
+import { initV3a, startV3aListeners, isV3aBusy, claimLine, claimDetailText, removeClaim } from "./v3a.js?v=29";
+import { initV3b, startV3bListeners, isV3bBusy, renderProfileCard, profileBadgeText } from "./v3b.js?v=29";
+import { makePathComparator, defaultTaskFilters, activeFilterCount, normalizeClaim, displayName } from "./v3a-logic.js?v=29";
+import { decideWaiting, decideReload, makeGuard, readGuard, RELOAD_GUARD_KEY, UPDATE_CHECK_MS, UPDATE_BAR_TEXT, isOwnController, isLoginBusy } from "./update-guard.js?v=29";
 
 let isAdmin = false;
 let tasks = [];
@@ -449,6 +450,7 @@ function startListeners() {
   if (listenersStarted) return;
   listenersStarted = true;
   startV3aListeners();
+  startV3bListeners();
   // V3A: claim ("Ik pak deze op") naast de genormaliseerde taak (shared.js blijft ongewijzigd).
   listenCollection("tasks", (id, d) => ({ ...normalizeTask(id, d), claim: normalizeClaim(d) }), (list) => {
     rawTasks = list;
@@ -1137,6 +1139,17 @@ function setupUi() {
     confirmAction,
     safeWrite
   });
+  initV3b({
+    dom,
+    showToast,
+    confirmAction,
+    safeWrite,
+    onProfilesChange: () => {
+      renderEmployees();
+      const emp = employees.find((e) => e.id === empDashId) || null;
+      renderProfileCard(emp);
+    }
+  });
   const clearFilters = document.getElementById("filters-clear");
   if (clearFilters) clearFilters.onclick = () => {
     taskFilters = defaultTaskFilters();
@@ -1185,6 +1198,7 @@ function isAppBusy() {
   if (formDirty) return true;
   if (loginFormBusy()) return true; // V3A: niet verversen terwijl het wachtwoord wordt getypt
   if (isV3aBusy()) return true; // onderhoudstekst nog niet opgeslagen
+  if (isV3bBusy()) return true; // afdeling/adminknop nog niet opgeslagen
   if (document.querySelector(".modal:not(.hidden), #app-dialog:not(.hidden), #image-lightbox:not(.hidden)")) return true;
   return isV2Busy();
 }
@@ -2374,6 +2388,7 @@ function employeeItem(emp) {
           ${legacy && emp.active ? dom`<p class="needs-code">Nieuwe startcode nodig</p>` : ""}
           ${open ? dom`<p class="employee-code">Open startcode · geldig tot ${formatDateTime(open.expiresAt)}</p>` : ""}
           ${!emp.active ? dom`<p class="employee-code muted">Inactief: inloggen geblokkeerd, geen startcode mogelijk</p>` : ""}
+          ${profileBadgeText(emp.id) ? dom`<p class="employee-profile pin-meta">${profileBadgeText(emp.id)}</p>` : ""}
         </div>
         <span class="badge ${emp.active ? "open" : "paused"}">${emp.active ? "Actief" : "Inactief"}</span>
       </div>
@@ -2559,6 +2574,8 @@ async function removeEmployee(id) {
     const batch = writeBatch(db);
     batch.delete(doc(db, "employees", id));
     if (employeeDetails.has(id)) batch.delete(doc(db, "employeeDetails", id));
+    // V3B: afdeling/adminknop mee weg (alleen als er een profiel is: zonder nieuwe regels zou de batch anders falen).
+    if (profileBadgeText(id)) batch.delete(doc(db, "staffProfiles", id));
     for (const code of startCodes.filter((c) => c.employeeId === id)) {
       batch.delete(doc(db, "startCodes", code.id));
     }
@@ -3127,6 +3144,7 @@ function renderEmployeeDashboard() {
     return;
   }
   renderEmpDashStatus(emp);
+  renderProfileCard(emp);
   renderEmpDashResets(emp);
   fillDetailsForm(empDashFormFor !== emp.id);
 }

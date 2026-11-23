@@ -110,6 +110,14 @@ Authenticatie:
 - **Audit verwijderen** (historie): eerst de audit, dan per gekoppelde taak bevestigen (taak + `taskMeta` + `taskCompletions`).
 - **Tests**: `cd tests && npm test`, `npm run test:alt`, `npm run test:unit`. Vóór livegang: `node tests/deploy-check.mjs --expect <commit>` (alleen lezen).
 
+## V3B (admin v29)
+
+- **Vlaggen** in `admin/v3b-logic.js`: `departments` en `adminSwitch` staan aan, `sessions` staat uit.
+- **Afdeling per pad**: in `settings/locations.departments {locationId: "sanitair"|"tegels"|"beide"}`, gelijk met `items[].department`. In Beheer stel je die per locatie in, of je klikt op *Afdelingen volgens afspraak invullen*; dat vult alleen lege paden. Een pad zonder afdeling is voor iedereen zichtbaar.
+- **Afdeling + adminknop per medewerker**: in `staffProfiles/{employeeId}` = `{department?, canAdmin?, updatedAt}`. Alleen de admin schrijft. De medewerker leest alleen het eigen doc en de reader leest niets. Je stelt het in op de medewerkerspagina. `canAdmin` toont in ZL alleen de knop naar ZLA, en ZLA vraagt altijd de eigen admin-login.
+- **Terug naar ZL**: in het menu en op het inlogscherm (`../`).
+- Datacontract: `zla-v3b-data-afspraak.md`. Tests: `npm test`, `npm run test:alt` en `npm run test:unit` (incl. `v3b-logic.test.mjs`).
+
 ## Technisch
 
 - Statische HTML, CSS en JavaScript, twee PWA's, live via GitHub Pages (repository blijft `afdeling-takenlijst`)

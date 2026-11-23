@@ -19,12 +19,13 @@ import {
   deleteField
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { db, localDateKey, amsterdamDateKey, formatDate, formatDateTime } from "../shared.js";
-import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js?v=28";
-import { AUDIT_SETTINGS, LOCATION_PLACEHOLDER, DEFAULT_LOCATIONS, defaultAuditSections } from "./audit-defaults.js?v=28";
+import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js?v=29";
+import { AUDIT_SETTINGS, LOCATION_PLACEHOLDER, DEFAULT_LOCATIONS, defaultAuditSections } from "./audit-defaults.js?v=29";
 import {
   DEFAULT_VARIANT_ID, VARIANT_NAME_MAX, RANBY_MAX, CUSTOM_TASK_TEXT_MAX,
   variantIdOf, normalizeVariant, mergeVariants, previousSameVariant, compareRows, cleanCustomTask, customTaskTitle
-} from "./v3a-logic.js?v=28";
+} from "./v3a-logic.js?v=29";
+import { FEATURES, DEPARTMENTS, DEPARTMENT_LABELS, normalizeDepartment, departmentsFromDoc, planDepartments, locationDepartmentFields } from "./v3b-logic.js?v=29";
 
 let ctx = null;
 let locationsDoc = null; // { items } of null (nog niet aangemaakt)
@@ -116,11 +117,13 @@ export function startV2Listeners() {
 }
 
 function normalizeLocationsDoc(data) {
+  // V3B: afdeling per pad (map gaat voor items[].department, net als in ZL).
+  const depts = departmentsFromDoc(data);
   const items = (Array.isArray(data.items) ? data.items : [])
     .filter((it) => it && typeof it.id === "string" && typeof it.label === "string")
-    .map((it, i) => ({ id: it.id, label: it.label, order: Number(it.order) || i + 1, active: it.active !== false, staffSelectable: it.staffSelectable !== false }))
+    .map((it, i) => ({ id: it.id, label: it.label, order: Number(it.order) || i + 1, active: it.active !== false, staffSelectable: it.staffSelectable !== false, department: depts[it.id] || "" }))
     .sort((a, b) => a.order - b.order);
-  return { items };
+  return { items, hasDepartments: Boolean(data.departments && typeof data.departments === "object") };
 }
 
 function normalizeConfig(data) {
@@ -179,12 +182,23 @@ function uniqueId(base, taken, max = 30) {
 }
 
 async function saveLocations(items) {
-  const sorted = items.map((it, i) => ({ id: it.id, label: it.label, order: i + 1, active: it.active !== false, staffSelectable: it.staffSelectable !== false }));
+  const base = items.map((it, i) => ({ id: it.id, label: it.label, order: i + 1, active: it.active !== false, staffSelectable: it.staffSelectable !== false, department: normalizeDepartment(it.department) }));
+  // V3B: items[].department en de map departments gelijk houden. Zonder afdelingen (en zonder eerdere map)
+  // blijft het doc precies zoals in v28 (geen departments-veld).
+  const { items: sorted, departments } = locationDepartmentFields(base);
+  const withMap = FEATURES.departments && (Object.keys(departments).length > 0 || (locationsDoc && locationsDoc.hasDepartments));
   // labels = wat medewerkers mogen kiezen (de regels controleren een nieuwe medewerkerstaak hiertegen):
   // alleen actief én staffSelectable. De admin (en audit-taken) mag elke locatie gebruiken.
   const labels = {};
   for (const it of sorted) if (it.active && it.staffSelectable) labels[it.id] = it.label;
-  return ctx.safeWrite(() => setDoc(doc(db, "settings", "locations"), { items: sorted, labels, updatedAt: serverTimestamp() }));
+  const data = { items: sorted, labels, updatedAt: serverTimestamp() };
+  if (withMap) data.departments = departments;
+  return ctx.safeWrite(() => setDoc(doc(db, "settings", "locations"), data));
+}
+
+export function locationDepartment(id) {
+  const loc = allLocations().find((l) => l.id === id);
+  return loc ? loc.department || "" : "";
 }
 
 export async function seedLocations() {
@@ -379,7 +393,7 @@ export async function restorePendingBy() {
 
 // ---------- Ruwe back-up ----------
 const BACKUP_COLLECTIONS = [
-  "tasks", "taskMeta", "taskCompletions", "recurring", "employees", "employeeDetails", "reports",
+  "tasks", "taskMeta", "taskCompletions", "recurring", "employees", "employeeDetails", "staffProfiles", "reports",
   "staffAccounts", "pinResetRequests", "staffDailyCounters", "settings", "auditConfig", "audits",
   "auditVariants" // V3A: audit-varianten
 ];
@@ -1600,7 +1614,12 @@ function renderLocationsAdmin() {
   if (!locationsReady) return dom`<p class="pin-meta">Laden…</p>`;
   if (!locationsDoc) return dom`<button type="button" data-seed-locations>Standaard locatielijst aanmaken (${DEFAULT_LOCATIONS.length})</button>`;
   const items = allLocations();
+  const plan = FEATURES.departments ? planDepartments(items) : null;
   return dom`
+    ${plan ? dom`<div class="loc-dept-bar">
+      <p class="pin-meta">Afdeling per pad bepaalt wat medewerkers met een afdeling in de app zien. Een pad zonder afdeling of met "Beide" ziet iedereen; persoonlijk toegewezen taken altijd.</p>
+      <button type="button" class="secondary" data-loc-dept-seed data-disabled="${flag(!plan.changes.length)}">Afdelingen volgens afspraak invullen${plan.changes.length ? ` (${plan.changes.length})` : " (alles ingevuld)"}</button>
+    </div>` : ""}
     <ol class="v2-list">
       ${items.map((l, i) => dom`
         <li class="v2-row${l.active ? "" : " inactive"}">
@@ -1610,6 +1629,12 @@ function renderLocationsAdmin() {
             <button type="button" class="secondary icon-btn" data-loc-down="${i}" aria-label="${`${l.label} omlaag`}" data-disabled="${flag(i === items.length - 1)}">↓</button>
             <button type="button" class="secondary" data-loc-rename="${i}">Naam</button>
             <label class="check-row loc-staff"><input type="checkbox" data-loc-staff="${i}" data-checked="${flag(l.staffSelectable)}"> Medewerkers kunnen kiezen</label>
+            ${FEATURES.departments ? dom`<label class="loc-dept">Afdeling
+              <select data-loc-dept="${i}" aria-label="${`Afdeling ${l.label}`}">
+                <option value="" data-selected="${flag(!l.department)}">Geen (iedereen)</option>
+                ${DEPARTMENTS.map((d) => dom`<option value="${d}" data-selected="${flag(l.department === d)}">${DEPARTMENT_LABELS[d]}</option>`)}
+              </select>
+            </label>` : ""}
             <button type="button" class="secondary" data-loc-toggle="${i}">${l.active ? "Deactiveren" : "Activeren"}</button>
           </span>
         </li>`)}
@@ -1964,6 +1989,25 @@ function bindBeheer(root) {
       box.blur();
       saveLocations(list);
     };
+  });
+  root.querySelectorAll("[data-loc-dept]").forEach((sel) => {
+    sel.onchange = () => {
+      const list = items();
+      list[Number(sel.dataset.locDept)].department = normalizeDepartment(sel.value);
+      sel.blur();
+      saveLocations(list);
+    };
+  });
+  on("[data-loc-dept-seed]", async () => {
+    const plan = planDepartments(items());
+    if (!plan.changes.length) return;
+    const count = (d) => plan.changes.filter((c) => c.to === d).length;
+    const ok = await ctx.confirmAction(
+      `${plan.changes.length} lege paden invullen volgens de afspraak: ${count("sanitair")} Sanitair, ${count("tegels")} Tegels, ${count("beide")} Beide. Al ingevulde paden blijven zoals ze zijn.${plan.unknown.length ? ` Niet in de afspraak (blijft leeg): ${plan.unknown.join(", ")}.` : ""}`,
+      { title: "Afdelingen per pad", confirmText: "Invullen" }
+    );
+    if (!ok) return;
+    if (await saveLocations(plan.items)) ctx.showToast("Afdelingen per pad ingevuld.", "ok");
   });
   on("[data-loc-rename]", async (el) => {
     const list = items();

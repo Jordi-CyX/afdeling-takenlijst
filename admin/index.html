@@ -29,14 +29,14 @@
   }
 }
   </script>
-  <script src="version.js?v=28"></script>
-  <link rel="manifest" href="manifest.webmanifest?v=28">
+  <script src="version.js?v=29"></script>
+  <link rel="manifest" href="manifest.webmanifest?v=29">
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=27">
   <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=27">
   <link rel="icon" href="favicon.ico?v=27" sizes="any">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=27">
-  <link rel="stylesheet" href="../styles.css?v=28">
-  <link rel="stylesheet" href="admin.css?v=28">
+  <link rel="stylesheet" href="../styles.css?v=29">
+  <link rel="stylesheet" href="admin.css?v=29">
 </head>
 <body>
   <header>
@@ -89,6 +89,7 @@
             </li>
             <li role="none"><button type="button" role="menuitem" data-section="beheer">Locaties &amp; vragen</button></li>
             <li role="none"><button type="button" role="menuitem" data-section="data">Data</button></li>
+            <li role="none" class="nav-link-zl hidden"><a role="menuitem" class="nav-zl" href="../">← Naar Zeiklijst (medewerkers)</a></li>
             <li role="none"><button type="button" role="menuitem" id="logout-btn">Uitloggen</button></li>
             <li role="none" class="made-by">Made by Jordi-CyX</li>
           </ul>
@@ -116,6 +117,7 @@
           <button type="submit">Inloggen</button>
         </div>
       </form>
+      <p class="nav-link-zl login-zl hidden"><a href="../">← Terug naar Zeiklijst (medewerkers)</a></p>
     </div>
     <p class="made-by">Made by Jordi-CyX</p>
   </div>
@@ -194,6 +196,7 @@
       <p id="emp-dash-empty" class="empty-state">Kies een medewerker om startcode, pincode en gegevens te beheren.</p>
       <div id="emp-dash-body" class="emp-dash hidden">
         <div id="emp-dash-status" class="emp-dash-card"></div>
+        <div id="emp-dash-profile" class="emp-dash-card hidden"></div>
         <div id="emp-dash-resets" class="pin-reset-list hidden"></div>
         <form id="emp-details-form" class="emp-dash-card emp-details-form" novalidate>
           <h3>Extra gegevens</h3>
@@ -505,6 +508,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=28"></script>
+  <script type="module" src="admin.js?v=29"></script>
 </body>
 </html>
