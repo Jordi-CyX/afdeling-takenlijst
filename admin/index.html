@@ -29,14 +29,14 @@
   }
 }
   </script>
-  <script src="version.js?v=29"></script>
-  <link rel="manifest" href="manifest.webmanifest?v=29">
+  <script src="version.js?v=30"></script>
+  <link rel="manifest" href="manifest.webmanifest?v=30">
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=27">
   <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=27">
   <link rel="icon" href="favicon.ico?v=27" sizes="any">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=27">
-  <link rel="stylesheet" href="../styles.css?v=29">
-  <link rel="stylesheet" href="admin.css?v=29">
+  <link rel="stylesheet" href="../styles.css?v=30">
+  <link rel="stylesheet" href="admin.css?v=30">
 </head>
 <body>
   <header>
@@ -61,6 +61,7 @@
             <li role="none"><button type="button" role="menuitem" data-section="dashboard">Dashboard</button></li>
             <li role="none"><button type="button" role="menuitem" data-section="audit">Audit lopen</button></li>
             <li role="none"><button type="button" role="menuitem" data-section="audits">Audits</button></li>
+            <li role="none"><button type="button" role="menuitem" data-section="beheer">Locaties</button></li>
             <li role="none">
               <button type="button" role="menuitem" data-section="medewerkers">
                 Overzicht Medewerkers
@@ -87,13 +88,19 @@
                 <span id="nav-reports-badge" class="nav-badge nav-badge-report hidden">0</span>
               </button>
             </li>
-            <li role="none"><button type="button" role="menuitem" data-section="beheer">Locaties &amp; vragen</button></li>
             <li role="none"><button type="button" role="menuitem" data-section="data">Data</button></li>
-            <li role="none" class="nav-link-zl hidden"><a role="menuitem" class="nav-zl" href="../">← Naar Zeiklijst (medewerkers)</a></li>
-            <li role="none"><button type="button" role="menuitem" id="logout-btn">Uitloggen</button></li>
             <li role="none" class="made-by">Made by Jordi-CyX</li>
           </ul>
         </nav>
+        <!-- V3C punt 7: wisselknop naar ZL en Uitloggen in de bovenbanner (afgestemd met ZL: zelfde vorm en volgorde). -->
+        <a id="header-zl-btn" class="header-btn header-btn-switch nav-link-zl hidden" href="../" title="Naar Zeiklijst (medewerkers)" aria-label="Naar Zeiklijst (medewerkers)">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20v-2z"/></svg>
+          <span class="header-btn-label">Naar ZL</span>
+        </a>
+        <button type="button" id="logout-btn" class="header-btn header-btn-logout" title="Uitloggen" aria-label="Uitloggen">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9v-2H5V5h9V3zm2.6 4.4-1.4 1.4 2.2 2.2H9v2h8.4l-2.2 2.2 1.4 1.4 4.6-4.6-4.6-4.6z"/></svg>
+          <span class="header-btn-label">Uitloggen</span>
+        </button>
         </div>
       </div>
     </div>
@@ -157,11 +164,16 @@
 
     <section id="section-audits" class="admin-section hidden" data-section="audits">
       <h2>Audits</h2>
-      <div id="audits-root"></div>
+      <p class="section-intro">Tik op een kopje om een onderdeel in of uit te klappen; dit toestel onthoudt de stand.</p>
+      <div class="emp-dash-card" id="audits-history-card">
+        <h3>Gelopen audits</h3>
+        <div id="audits-root"></div>
+      </div>
+      <div id="audits-admin-root" class="emp-dash"></div>
     </section>
 
     <section id="section-beheer" class="admin-section hidden" data-section="beheer">
-      <h2>Locaties &amp; vragen</h2>
+      <h2>Locaties</h2>
       <div id="beheer-root" class="emp-dash"></div>
     </section>
 
@@ -508,6 +520,6 @@
     <img id="lightbox-image" alt="">
   </div>
 
-  <script type="module" src="admin.js?v=29"></script>
+  <script type="module" src="admin.js?v=30"></script>
 </body>
 </html>

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="nl"><head><meta charset="UTF-8"><title>v3c folds</title>
+<link rel="stylesheet" href="../admin/admin.css"></head>
+<body>
+<!-- Browsertest voor admin/v3c.js (inklappen). Wordt geopend door v3c-folds-browser.mjs; geen Firebase. -->
+<main id="admin-app">
+  <section class="admin-section" data-section="audits">
+    <div id="root" class="emp-dash"></div>
+    <div id="audit-root"><h3>Wizard</h3><p id="wiz">x</p></div>
+    <details><summary><h3>Bestaand</h3></summary><p>y</p></details>
+  </section>
+  <section class="admin-section" data-section="data">
+    <h2>Data</h2><h3>Export</h3><p id="d1">a</p><p id="d2">b</p><h3>Opschonen</h3><p id="d3">c</p>
+  </section>
+</main>
+<pre id="out">BEZIG</pre>
+<script type="module">
+const res = [];
+const t = (name, ok) => res.push(`${ok ? "PASS" : "FAIL"} | ${name}`);
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const hidden = (el) => getComputedStyle(el).display === "none";
+const draw = (n) => { document.getElementById("root").innerHTML = `<div class="emp-dash-card" id="card"><h3>Vragenlijst en ronde · Variant ${n}</h3><p id="p1">tekst</p><ol id="lijst"><li>vraag</li></ol></div>`; };
+try {
+  localStorage.clear();
+  const { initV3c } = await import("../admin/v3c.js");
+  draw(1);
+  initV3c();
+  await tick();
+  const h = () => document.querySelector("#card h3");
+  t("kopje wordt knop (role, tabindex, aria-expanded=true)", h().getAttribute("role") === "button" && h().tabIndex === 0 && h().getAttribute("aria-expanded") === "true");
+  h().click(); await tick();
+  t("klik klapt kaartinhoud in", hidden(document.getElementById("p1")) && hidden(document.getElementById("lijst")) && !hidden(h()));
+  t("stand bewaard in localStorage", JSON.stringify(JSON.parse(localStorage.getItem("zeiklijst-admin-folds-v3c"))) === JSON.stringify({ "audits:vragenlijst en ronde": false }));
+  draw(2); await tick();
+  t("na opnieuw tekenen (andere variantnaam) blijft hij dicht", hidden(document.getElementById("p1")) && h().getAttribute("aria-expanded") === "false");
+  h().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await tick();
+  t("Enter klapt weer open", !hidden(document.getElementById("p1")) && localStorage.getItem("zeiklijst-admin-folds-v3c") === "{}");
+  const e = [...document.querySelectorAll("[data-section=data] h3")][0];
+  e.click(); await tick();
+  t("los kopje klapt tot volgend kopje in", hidden(document.getElementById("d1")) && hidden(document.getElementById("d2")) && !hidden(document.getElementById("d3")));
+  t("audit-wizard en bestaande details niet aangepast", !document.querySelector("#audit-root h3").classList.contains("fold-head") && !document.querySelector("summary h3").classList.contains("fold-head"));
+  const p = document.createElement("p"); p.id = "d1b"; document.getElementById("d1").after(p); await tick();
+  t("nieuw toegevoegde inhoud onder dicht kopje is ook verborgen", hidden(p));
+  // Herladen simuleren: nieuwe module-instantie leest de stand opnieuw.
+  const { initV3c: again } = await import("../admin/v3c.js?herlaad");
+  t("tweede init leest opgeslagen stand", (again(), true));
+} catch (err) { t(`fout: ${err.message}`, false); }
+const pass = res.filter((r) => r.startsWith("PASS")).length;
+document.getElementById("out").textContent = `${res.join("\n")}\nRESULT ${pass}/${res.length}`;
+</script>
+</body></html>

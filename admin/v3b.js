@@ -2,7 +2,7 @@
 // Datacontract: /workspace/outputs/zla-v3b-data-afspraak.md. Renderen alleen via ctx.dom (geen HTML uit data).
 import { onSnapshot, collection, doc, setDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { db } from "../shared.js";
-import { FEATURES, DEPARTMENTS, DEPARTMENT_LABELS, normalizeProfile, profilePayload, profileSummary } from "./v3b-logic.js?v=29";
+import { FEATURES, DEPARTMENTS, DEPARTMENT_LABELS, normalizeProfile, profilePayload, profileSummary } from "./v3b-logic.js?v=30";
 
 let ctx = null;
 let profiles = new Map(); // employeeId -> { department, canAdmin }

@@ -63,11 +63,12 @@ import {
   v2SubView,
   isV2Busy,
   saveDraftNow
-} from "./v2.js?v=29";
-import { initV3a, startV3aListeners, isV3aBusy, claimLine, claimDetailText, removeClaim } from "./v3a.js?v=29";
-import { initV3b, startV3bListeners, isV3bBusy, renderProfileCard, profileBadgeText } from "./v3b.js?v=29";
-import { makePathComparator, defaultTaskFilters, activeFilterCount, normalizeClaim, displayName } from "./v3a-logic.js?v=29";
-import { decideWaiting, decideReload, makeGuard, readGuard, RELOAD_GUARD_KEY, UPDATE_CHECK_MS, UPDATE_BAR_TEXT, isOwnController, isLoginBusy } from "./update-guard.js?v=29";
+} from "./v2.js?v=30";
+import { initV3a, startV3aListeners, isV3aBusy, claimLine, claimDetailText, removeClaim } from "./v3a.js?v=30";
+import { initV3b, startV3bListeners, isV3bBusy, renderProfileCard, profileBadgeText } from "./v3b.js?v=30";
+import { initV3c } from "./v3c.js?v=30";
+import { makePathComparator, defaultTaskFilters, activeFilterCount, normalizeClaim, displayName } from "./v3a-logic.js?v=30";
+import { decideWaiting, decideReload, makeGuard, readGuard, RELOAD_GUARD_KEY, UPDATE_CHECK_MS, UPDATE_BAR_TEXT, isOwnController, isLoginBusy } from "./update-guard.js?v=30";
 
 let isAdmin = false;
 let tasks = [];
@@ -183,12 +184,12 @@ function safeStatus(status) {
 }
 
 const SECTION_KEY = "zeiklijst-admin-section";
-const SECTIONS = ["dashboard", "audit", "audits", "medewerkers", "medewerker", "taken", "controle", "workflow", "meldingen", "beheer", "data"];
+const SECTIONS = ["dashboard", "audit", "audits", "beheer", "medewerkers", "medewerker", "taken", "controle", "workflow", "meldingen", "data"];
 const SECTION_LABELS = {
   dashboard: "Dashboard",
   audit: "Audit lopen",
   audits: "Audits",
-  beheer: "Locaties & vragen",
+  beheer: "Locaties",
   medewerkers: "Overzicht Medewerkers",
   medewerker: "Medewerker",
   taken: "Taken",
@@ -1055,6 +1056,7 @@ function setupUi() {
   const logoBtn = document.getElementById("logo-home");
   if (logoBtn) logoBtn.onclick = () => showSection("dashboard");
   setupFolds();
+  initV3c(); // V3C punt 4: elk kopje (h3) op elke pagina inklapbaar, stand per apparaat
   setupBackButtons();
   setupDashboardNav();
   const logoTitle = document.getElementById("logo-home-title");

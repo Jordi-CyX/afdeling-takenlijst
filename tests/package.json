@@ -8,7 +8,8 @@
     "test:export": "node xlsx-export.test.mjs",
     "test:v3a": "node v3a-logic.test.mjs",
     "test:v3b": "node v3b-logic.test.mjs",
-    "test:unit": "node update-guard.test.mjs && node xlsx-export.test.mjs && node v3a-logic.test.mjs && node v3b-logic.test.mjs"
+    "test:v3c": "node v3c-logic.test.mjs",
+    "test:unit": "node update-guard.test.mjs && node xlsx-export.test.mjs && node v3a-logic.test.mjs && node v3b-logic.test.mjs && node v3c-logic.test.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^6.0.0",

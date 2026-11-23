@@ -19,13 +19,15 @@ import {
   deleteField
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 import { db, localDateKey, amsterdamDateKey, formatDate, formatDateTime } from "../shared.js";
-import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js?v=29";
-import { AUDIT_SETTINGS, LOCATION_PLACEHOLDER, DEFAULT_LOCATIONS, defaultAuditSections } from "./audit-defaults.js?v=29";
+import { buildExportSheets, buildXlsx, XLSX_MIME } from "./xlsx-export.js?v=30";
+import { AUDIT_SETTINGS, LOCATION_PLACEHOLDER, DEFAULT_LOCATIONS, defaultAuditSections } from "./audit-defaults.js?v=30";
 import {
   DEFAULT_VARIANT_ID, VARIANT_NAME_MAX, RANBY_MAX, CUSTOM_TASK_TEXT_MAX,
   variantIdOf, normalizeVariant, mergeVariants, previousSameVariant, compareRows, cleanCustomTask, customTaskTitle
-} from "./v3a-logic.js?v=29";
-import { FEATURES, DEPARTMENTS, DEPARTMENT_LABELS, normalizeDepartment, departmentsFromDoc, planDepartments, locationDepartmentFields } from "./v3b-logic.js?v=29";
+} from "./v3a-logic.js?v=30";
+import { FEATURES, DEPARTMENTS, DEPARTMENT_LABELS, normalizeDepartment, departmentsFromDoc, planDepartments, locationDepartmentFields } from "./v3b-logic.js?v=30";
+import { BANK_MAX, normalizeBankQuestion, bankPayload, bankFromQuestion, questionFromBank, sameQuestionText, sortBank } from "./v3c-logic.js?v=30";
+import { applyFolds } from "./v3c.js?v=30";
 
 let ctx = null;
 let locationsDoc = null; // { items } of null (nog niet aangemaakt)
@@ -53,6 +55,13 @@ let historyOpen = new Set();
 let editingQuestion = null; // { sectionIndex, questionIndex | -1 }
 let finishing = false;
 let linkIncludeDone = false;
+// V3C punt 5: welke "Vragen (n)"-blokken open staan (per variant + onderdeel), zodat ze na opslaan/verwijderen open blijven.
+const openQuestionBlocks = new Set();
+// V3C punt 6: vragenbank (questionBank/{id}), alleen admin.
+let bankDocs = [];
+let bankReady = false;
+let bankError = false;
+let bankEditing = null; // null | { id: "" (nieuw) of doc-id }
 const AUDIT_POS_KEY = "zeiklijst-admin-audit-pos";
 const noop = () => {};
 
@@ -87,6 +96,17 @@ export function startV2Listeners() {
   }, () => {
     variantsReady = true;
     renderV2();
+  });
+  // V3C: zonder nieuwe regels (nog niet live) faalt dit met permission-denied; de kaart toont dan een melding.
+  onSnapshot(query(collection(db, "questionBank"), limit(BANK_MAX)), (snap) => {
+    bankDocs = sortBank(snap.docs.map((d) => ({ id: d.id, createdAt: (d.data() || {}).createdAt || null, ...normalizeBankQuestion(d.data()) })).filter((q) => q.text));
+    bankReady = true;
+    bankError = false;
+    renderBeheer();
+  }, () => {
+    bankReady = true;
+    bankError = true;
+    renderBeheer();
   });
   onSnapshot(query(collection(db, "audits"), orderBy("startedAt", "desc"), limit(AUDIT_SETTINGS.historyLimit)), (snap) => {
     audits = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -395,7 +415,8 @@ export async function restorePendingBy() {
 const BACKUP_COLLECTIONS = [
   "tasks", "taskMeta", "taskCompletions", "recurring", "employees", "employeeDetails", "staffProfiles", "reports",
   "staffAccounts", "pinResetRequests", "staffDailyCounters", "settings", "auditConfig", "audits",
-  "auditVariants" // V3A: audit-varianten
+  "auditVariants", // V3A: audit-varianten
+  "questionBank" // V3C: standaardvragen
 ];
 
 function toPlain(value) {
@@ -767,7 +788,7 @@ async function startAudit() {
   }
   const variant = startVariant();
   if (!locationsDoc || !variant) {
-    ctx.showToast("Maak eerst de locatielijst en de vragenlijst aan (Locaties & vragen).");
+    ctx.showToast("Maak eerst de locatielijst (Locaties) en de vragenlijst (Audits) aan.");
     return;
   }
   const sections = buildSnapshot(variant);
@@ -918,8 +939,8 @@ export function v2SubView(section) {
     if (auditMode === "review") return { label: "Vragen", up: () => { auditMode = "run"; auditPos = draft.sections.length - 1; storePos(); renderAudit(); } };
     if (auditMode === "run") return { label: "Audit lopen", up: () => { scheduleSave(true); auditMode = "start"; renderAudit(); ctx.showToast("Audit gepauzeerd en bewaard.", "ok"); } };
   }
-  if (section === "audits" && historyOpen.size) return { label: "Audits", up: () => { historyOpen.clear(); renderHistory(); } };
-  if (section === "beheer" && editingQuestion) return { label: "Locaties & vragen", up: () => { editingQuestion = null; renderBeheer(); } };
+  if (section === "audits" && historyOpen.size && !editingQuestion && !bankEditing) return { label: "Audits", up: () => { historyOpen.clear(); renderHistory(); } };
+  if (section === "audits" && (editingQuestion || bankEditing)) return { label: "Audits", up: () => { editingQuestion = null; bankEditing = null; renderBeheer(); } };
   return null;
 }
 
@@ -952,7 +973,7 @@ function renderAudit() {
     const answered = secs.filter(sectionComplete).length;
     root.replaceChildren(dom`
       <div class="audit-start">
-        ${missing.length ? dom`<div class="v2-setup"><p>Nog niet ingesteld: ${missing.join(" en ")}. Ga naar <strong>Locaties &amp; vragen</strong> om de standaardlijst aan te maken.</p><button type="button" data-goto-beheer>Naar Locaties &amp; vragen</button></div>` : ""}
+        ${missing.length ? dom`<div class="v2-setup"><p>Nog niet ingesteld: ${missing.join(" en ")}. Ga naar <strong>${missing.includes("locatielijst") ? "Locaties" : "Audits"}</strong> om de standaardlijst aan te maken.</p><button type="button" data-goto-beheer data-goto="${missing.includes("locatielijst") ? "beheer" : "audits"}">Naar ${missing.includes("locatielijst") ? "Locaties" : "Audits"}</button></div>` : ""}
         ${a ? dom`
           <div class="audit-resume">
             <p><strong>Er loopt een audit</strong> (${auditVariantName(a.data)}) van ${formatDate(a.data.auditDate)}${a.data.ranBy ? `, gelopen door ${a.data.ranBy}` : ""}: ${answered} van ${secs.length} onderdelen ingevuld.</p>
@@ -974,7 +995,7 @@ function renderAudit() {
     b("[data-start]", startAudit);
     b("[data-resume]", resumeAudit);
     b("[data-discard]", discardAudit);
-    b("[data-goto-beheer]", () => ctx.showSection("beheer"));
+    b("[data-goto-beheer]", (e) => ctx.showSection((e.currentTarget && e.currentTarget.dataset.goto) || "beheer"));
     const pick = root.querySelector("[data-start-variant]");
     if (pick) pick.onchange = () => {
       startVariantId = pick.value;
@@ -1576,15 +1597,34 @@ export function printAudit(id) {
   setTimeout(() => window.print(), 50);
 }
 
-// ---------- Beheer: locaties, vragenlijst, koppelen ----------
-function renderBeheer() {
-  const root = document.getElementById("beheer-root");
-  if (!root) return;
-  const { dom } = ctx;
-  // Niet overschrijven terwijl iemand in een invoerveld typt.
+// ---------- Beheer: locaties (menukopje Locaties) en varianten/vragenlijst/standaardvragen (menukopje Audits) ----------
+// V3C punt 1-3: de locatielijst staat onder "Locaties"; varianten, vragenlijsten en standaardvragen onder "Audits".
+// renderBeheer tekent beide pagina's (alle bestaande aanroepen blijven werken).
+function typingIn(root) {
   const active = document.activeElement;
-  if (active && root.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
-  root.replaceChildren(dom`
+  return !!(active && root.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName));
+}
+
+// V3C punt 5: na opnieuw tekenen dezelfde scrollpositie houden (alleen als de pagina zichtbaar is).
+function keepScroll(root, draw) {
+  const visible = root.offsetParent !== null;
+  const y = window.scrollY;
+  draw();
+  applyFlags(root); // open blokken eerst openzetten, dan pas de scrollpositie terugzetten
+  applyFolds(root);
+  if (visible && Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
+}
+
+function renderBeheer() {
+  renderLocationsPage();
+  renderAuditsAdmin();
+}
+
+function renderLocationsPage() {
+  const root = document.getElementById("beheer-root");
+  if (!root || typingIn(root)) return;
+  const { dom } = ctx;
+  keepScroll(root, () => root.replaceChildren(dom`
     <div class="emp-dash-card">
       <h3>Locatielijst</h3>
       <p class="pin-meta">Medewerkers kiezen bij een nieuwe taak alleen uit de actieve locaties. Een locatie wordt nooit verwijderd, alleen gedeactiveerd (oude taken houden hun naam).</p>
@@ -1594,19 +1634,34 @@ function renderBeheer() {
       <h3>Oude taken koppelen aan een locatie</h3>
       <p class="pin-meta">Taken zonder vaste locatie, gegroepeerd op hun oude vrije tekst. Koppelen zet alleen de vaste locatie; de oude tekst blijft bewaard.</p>
       ${renderLinkLegacy()}
-    </div>
+    </div>`));
+  applyFlags(root);
+  bindBeheer(root);
+}
+
+function renderAuditsAdmin() {
+  const root = document.getElementById("audits-admin-root");
+  if (!root || typingIn(root)) return;
+  const { dom } = ctx;
+  keepScroll(root, () => root.replaceChildren(dom`
     <div class="emp-dash-card" id="variants-card">
       <h3>Audit-varianten</h3>
       <p class="pin-meta">Elke variant heeft een eigen vragenlijst en ronde. Bij Audit lopen kies je de variant. Met Vergelijken aan vergelijkt de PDF met de vorige 2 audits van dezelfde variant; varianten worden nooit met elkaar vergeleken.</p>
       ${renderVariantsAdmin()}
     </div>
     <div class="emp-dash-card">
-      <h3>Vragenlijst en ronde${editVariant() ? ` · ${editVariant().name}` : ""}</h3>
-      <p class="pin-meta">De volgorde hieronder is de volgorde van de ronde. Een lopende audit houdt de vragen van het moment van starten. In een taaktekst wordt <code>{locatie}</code> vervangen door de naam van het onderdeel.</p>
+      <h3 data-fold-label="Vragenlijst en ronde">Vragenlijst en ronde${editVariant() ? ` · ${editVariant().name}` : ""}</h3>
+      <p class="pin-meta">De volgorde hieronder is de volgorde van de ronde. Een lopende audit houdt de vragen van het moment van starten. In een taaktekst wordt <code>{locatie}</code> vervangen door de naam van het onderdeel. Bij elk onderdeel kun je een standaardvraag kiezen.</p>
       ${renderConfigAdmin()}
-    </div>`);
+    </div>
+    <div class="emp-dash-card" id="bank-card">
+      <h3>Standaardvragen</h3>
+      <p class="pin-meta">Vaste vragen die je vaak gebruikt. Bewaar ze hier één keer en kies ze daarna bij een onderdeel van een vragenlijst (elke variant), in plaats van ze opnieuw te typen. Een gekozen vraag wordt gekopieerd: later wijzigen in de standaardvragen verandert bestaande vragenlijsten niet.</p>
+      ${renderBankAdmin()}
+    </div>`));
   applyFlags(root);
   bindBeheer(root);
+  bindBank(root);
 }
 
 function renderLocationsAdmin() {
@@ -1839,7 +1894,7 @@ function renderConfigAdmin() {
               <button type="button" class="secondary" data-sec-toggle="${si}">${s.active ? "Uit ronde" : "In ronde"}</button>
             </span>
           </div>
-          <details class="config-questions" data-open="${flag(editingQuestion && editingQuestion.sectionIndex === si)}">
+          <details class="config-questions" data-q-block="${blockKey(ev, s)}" data-open="${flag(openQuestionBlocks.has(blockKey(ev, s)) || (editingQuestion && editingQuestion.sectionIndex === si))}">
             <summary>Vragen (${s.questions.length})</summary>
             <ol class="question-list">
               ${s.questions.map((q, qi) => (editing(si, qi) ? questionEditor(q, si, qi) : dom`<li class="question-row">
@@ -1851,12 +1906,16 @@ function renderConfigAdmin() {
                       <button type="button" class="secondary" data-q-edit="${si}:${qi}">Bewerken</button>
                       <button type="button" class="secondary icon-btn" data-q-up="${si}:${qi}" aria-label="Vraag omhoog" data-disabled="${flag(qi === 0)}">↑</button>
                       <button type="button" class="secondary icon-btn" data-q-down="${si}:${qi}" aria-label="Vraag omlaag" data-disabled="${flag(qi === s.questions.length - 1)}">↓</button>
+                      <button type="button" class="secondary" data-q-tobank="${si}:${qi}" data-disabled="${flag(!bankReady || bankError || bankDocs.some((b) => sameQuestionText(b, q)))}">${bankDocs.some((b) => sameQuestionText(b, q)) ? "Is standaardvraag" : "Bewaar als standaardvraag"}</button>
                       <button type="button" class="danger" data-q-del="${si}:${qi}">Verwijderen</button>
                     </span>
                   </li>`))}
               ${editing(si, -1) ? questionEditor({ text: "", trigger: "nee", taskText: `${LOCATION_PLACEHOLDER} - ` }, si, -1) : ""}
             </ol>
-            <button type="button" class="secondary" data-q-add="${si}">Vraag toevoegen</button>
+            <div class="form-actions q-block-actions">
+              <button type="button" class="secondary" data-q-add="${si}">Vraag toevoegen</button>
+              ${bankPicker(s, si)}
+            </div>
           </details>
         </li>`)}
     </ol>
@@ -1868,19 +1927,107 @@ function renderConfigAdmin() {
     </form>` : ""}`;
 }
 
+function blockKey(v, s) {
+  return `${v ? v.id : "x"}|${s ? s.locationId : "x"}`;
+}
+
+// V3C punt 6: keuzelijst "Standaardvraag kiezen" in een onderdeel van de vragenlijst.
+function bankPicker(s, si) {
+  const { dom } = ctx;
+  if (!bankReady || bankError || !bankDocs.length) return "";
+  const free = bankDocs.filter((b) => !s.questions.some((x) => sameQuestionText(x, b)));
+  if (!free.length) return dom`<span class="pin-meta">Alle standaardvragen staan al in dit onderdeel.</span>`;
+  return dom`<form class="v2-inline-form bank-pick" data-q-bank-pick="${si}" novalidate>
+    <label>Standaardvraag kiezen
+      <select>${free.map((b) => dom`<option value="${b.id}">${b.text}</option>`)}</select>
+    </label>
+    <button type="submit" class="secondary">Toevoegen</button>
+  </form>`;
+}
+
+function renderBankAdmin() {
+  const { dom } = ctx;
+  if (!bankReady) return dom`<p class="pin-meta">Laden…</p>`;
+  if (bankError) return dom`<p class="form-error">Kan de standaardvragen niet lezen (regels nog niet gepubliceerd?). Bewaren lukt pas na de nieuwe regels.</p>`;
+  const editing = (id) => bankEditing && bankEditing.id === id;
+  return dom`
+    ${bankDocs.length ? dom`<ol class="question-list bank-list">
+      ${bankDocs.map((b) => (editing(b.id) ? questionEditor(b, -1, -1, "bank") : dom`<li class="question-row">
+        <div class="question-main">
+          <span>${b.text}</span>
+          <span class="pin-meta">Taak bij ${b.trigger === "ja" ? "Ja" : "Nee"} → ${questionSummary(b)}</span>
+        </div>
+        <span class="v2-row-actions">
+          <button type="button" class="secondary" data-bank-edit="${b.id}">Bewerken</button>
+          <button type="button" class="danger" data-bank-del="${b.id}">Verwijderen</button>
+        </span>
+      </li>`))}
+    </ol>` : dom`<p class="empty-state">Nog geen standaardvragen. Voeg er hieronder een toe, of tik bij een vraag in de vragenlijst op "Bewaar als standaardvraag".</p>`}
+    ${editing("") ? dom`<ol class="question-list">${questionEditor({ text: "", trigger: "nee", taskText: `${LOCATION_PLACEHOLDER} - ` }, -1, -1, "bank")}</ol>` : dom`<button type="button" class="secondary" data-bank-add data-disabled="${flag(bankDocs.length >= BANK_MAX)}">Standaardvraag toevoegen</button>`}`;
+}
+
+async function saveBankQuestion(id, q) {
+  const payload = bankPayload(q);
+  if (!payload) { ctx.showToast("Deze vraag is niet compleet."); return false; }
+  if (bankDocs.some((b) => b.id !== id && sameQuestionText(b, payload))) { ctx.showToast("Deze standaardvraag bestaat al."); return false; }
+  if (!id && bankDocs.length >= BANK_MAX) { ctx.showToast(`Maximaal ${BANK_MAX} standaardvragen.`); return false; }
+  const newId = id || uniqueId(slugify(payload.text, 40), new Set(bankDocs.map((b) => b.id)), 40);
+  const data = { ...payload, updatedAt: serverTimestamp() };
+  if (!id) data.createdAt = serverTimestamp();
+  // set zonder merge: oude velden (bijv. taskText na wisselen naar keuzes) verdwijnen; createdAt blijft bij bewerken.
+  const prev = id ? bankDocs.find((b) => b.id === id) : null;
+  if (prev && prev.createdAt) data.createdAt = prev.createdAt;
+  return ctx.safeWrite(() => setDoc(doc(db, "questionBank", newId), data));
+}
+
+function bindBank(root) {
+  const on = (sel, fn) => root.querySelectorAll(sel).forEach((el) => { el.onclick = (e) => fn(el, e); });
+  on("[data-bank-add]", () => { bankEditing = { id: "" }; editingQuestion = null; renderBeheer(); });
+  on("[data-bank-edit]", (el) => { bankEditing = { id: el.dataset.bankEdit }; editingQuestion = null; renderBeheer(); });
+  on("[data-bank-del]", async (el) => {
+    const b = bankDocs.find((x) => x.id === el.dataset.bankDel);
+    if (!b) return;
+    const ok = await ctx.confirmAction(`Standaardvraag "${b.text}" verwijderen? Vragenlijsten waarin deze vraag al staat, blijven zoals ze zijn.`, { title: "Standaardvraag verwijderen", confirmText: "Verwijderen", danger: true });
+    if (!ok) return;
+    if (await ctx.safeWrite(() => deleteDoc(doc(db, "questionBank", b.id)))) ctx.showToast("Standaardvraag verwijderd.", "ok");
+  });
+  const form = root.querySelector('[data-q-form="bank"]');
+  if (!form) return;
+  syncEditorKind(form);
+  form.elements.kind.onchange = () => syncEditorKind(form);
+  form.querySelector("[data-q-cancel]").onclick = () => { bankEditing = null; renderBeheer(); };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const res = readQuestionForm(form, { questions: [] }, -1);
+    const err = form.querySelector("[data-q-error]");
+    if (res.error) {
+      err.textContent = res.error;
+      err.classList.remove("hidden");
+      return;
+    }
+    const id = bankEditing ? bankEditing.id : "";
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    if (await saveBankQuestion(id, res.q)) {
+      bankEditing = null;
+      ctx.showToast("Standaardvraag opgeslagen.", "ok");
+      renderBeheer();
+    }
+  };
+}
+
 function questionSummary(q) {
   if (q.followUp) return `controlevraag "${q.followUp.text}" (${q.followUp.trigger === "ja" ? "Ja" : "Nee"} → ${q.followUp.taskText})`;
   if (Array.isArray(q.reasons) && q.reasons.length) return `Waarom: ${q.reasons.map((r) => `${r.label} → ${r.taskText}`).join("; ")}`;
   return q.taskText || "(geen taak)";
 }
 
-function questionEditor(q, si, qi) {
+function questionEditor(q, si, qi, formKey = `${si}:${qi}`) {
   const { dom } = ctx;
   const kind = q.followUp ? "follow" : (Array.isArray(q.reasons) && q.reasons.length ? "reasons" : "task");
   const reasonsText = (q.reasons || []).map((r) => `${r.label} | ${r.taskText}`).join("\n");
   const fuTrigger = q.followUp && q.followUp.trigger === "nee" ? "nee" : "ja";
   return dom`<li class="question-editor">
-    <form data-q-form="${si}:${qi}" novalidate>
+    <form data-q-form="${formKey}" novalidate>
       <label>Vraag <input type="text" name="text" maxlength="200" value="${q.text || ""}"></label>
       <label>Taak bij antwoord
         <select name="trigger"><option value="nee" data-selected="${flag(q.trigger !== "ja")}">Nee</option><option value="ja" data-selected="${flag(q.trigger === "ja")}">Ja</option></select>
@@ -2123,10 +2270,45 @@ function bindBeheer(root) {
     const q = secs[si].questions[qi];
     const ok = await ctx.confirmAction(`Vraag "${q.text}" verwijderen uit ${sectionLabel(secs[si].locationId)}?`, { title: "Vraag verwijderen", confirmText: "Verwijderen", danger: true });
     if (!ok) return;
+    openQuestionBlocks.add(blockKey(editVariant(), secs[si]));
     secs[si].questions.splice(qi, 1);
     saveSecs(secs);
   });
+  // V3C punt 5: open/dicht van elk "Vragen"-blok onthouden, zodat het na opslaan of verwijderen open blijft.
+  root.querySelectorAll("details[data-q-block]").forEach((d) => {
+    d.addEventListener("toggle", () => {
+      if (d.open) openQuestionBlocks.add(d.dataset.qBlock);
+      else openQuestionBlocks.delete(d.dataset.qBlock);
+    });
+  });
+  on("[data-q-tobank]", async (el) => {
+    const [si, qi] = pair(el.dataset.qTobank);
+    const ev = editVariant();
+    const q = ev && ev.sections[si] && ev.sections[si].questions[qi];
+    if (!q) return;
+    if (await saveBankQuestion("", bankFromQuestion(q))) ctx.showToast("Bewaard als standaardvraag.", "ok");
+  });
+  root.querySelectorAll("[data-q-bank-pick]").forEach((form) => {
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const si = Number(form.dataset.qBankPick);
+      const sel = form.querySelector("select");
+      const b = bankDocs.find((x) => x.id === sel.value);
+      sel.blur();
+      if (!b) { ctx.showToast("Kies eerst een standaardvraag."); return; }
+      const secs = configCopy();
+      const s = secs[si];
+      if (!s) return;
+      if (s.questions.some((x) => sameQuestionText(x, b))) { ctx.showToast("Deze vraag staat al in dit onderdeel."); return; }
+      const nq = questionFromBank(b, s.questions.map((x) => x.id), (text, taken) => uniqueId(slugify(text, 40), taken, 40));
+      if (!nq) return;
+      s.questions.push(nq);
+      openQuestionBlocks.add(blockKey(editVariant(), s));
+      if (await saveSecs(secs)) ctx.showToast("Standaardvraag toegevoegd.", "ok");
+    };
+  });
   root.querySelectorAll("[data-q-form]").forEach((form) => {
+    if (form.dataset.qForm === "bank") return; // vragenbank: zie bindBank
     const [si, qi] = pair(form.dataset.qForm);
     syncEditorKind(form);
     form.elements.kind.onchange = () => syncEditorKind(form);

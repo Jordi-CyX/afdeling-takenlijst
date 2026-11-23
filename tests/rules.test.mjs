@@ -681,6 +681,27 @@ await t("v3b-profiel", "canAdmin geeft geen adminrechten (medewerker met canAdmi
 await t("v3b-profiel", "employees blijft zonder afdeling/canAdmin: reader ziet geen afdeling", async () => { let d; await env.withSecurityRulesDisabled(async (c) => { d = (await c.firestore().doc("employees/emp-staff").get()).data(); }); if ("department" in d || "canAdmin" in d) throw new Error("employees bevat afdeling/canAdmin"); });
 await t("v3b-sessies", "staffSessions blijft dicht (sessies uit)", async () => { await assertFails(S().doc("staffSessions/sessStaff000000001").set({ employeeId: "emp-staff", uid: "u-staff", device: "x", createdAt: ST(), lastActive: ST(), revoked: false })); });
 
+// V3C (admin v30): standaardvragen (questionBank), alleen admin.
+const bankQ = (over = {}) => ({ text: "Is de vloer schoon?", trigger: "nee", taskText: "{locatie} - vloer vegen", createdAt: ST(), updatedAt: ST(), ...over });
+await t("v3c-bank", "admin: standaardvraag (directe taak) aanmaken slaagt", () => assertSucceeds(A().doc("questionBank/vloer-schoon").set(bankQ())));
+await t("v3c-bank", "admin: standaardvraag met controlevraag slaagt", () => { const q = bankQ({ followUp: { text: "Is er voorraad?", trigger: "ja", taskText: "Bijvullen" } }); delete q.taskText; return assertSucceeds(A().doc("questionBank/voorraad").set(q)); });
+await t("v3c-bank", "admin: standaardvraag met keuzes slaagt", () => { const q = bankQ({ reasons: [{ id: "vuil", label: "Vuil", taskText: "Schoonmaken" }] }); delete q.taskText; return assertSucceeds(A().doc("questionBank/keuzes").set(q)); });
+await t("v3c-bank", "admin: zonder createdAt (bewerken) slaagt", () => { const q = bankQ(); delete q.createdAt; return assertSucceeds(A().doc("questionBank/x1").set(q)); });
+await t("v3c-bank", "admin: lezen (lijst + doc) en verwijderen slaagt", async () => { await seedDoc("questionBank/oud", { ...bankQ(), createdAt: TS.now(), updatedAt: TS.now() }); await assertSucceeds(A().collection("questionBank").get()); await assertSucceeds(A().doc("questionBank/oud").get()); await assertSucceeds(A().doc("questionBank/oud").delete()); });
+await t("v3c-bank", "admin: lege tekst faalt", () => assertFails(A().doc("questionBank/x").set(bankQ({ text: "  " }))));
+await t("v3c-bank", "admin: tekst > 200 faalt", () => assertFails(A().doc("questionBank/x").set(bankQ({ text: "x".repeat(201) }))));
+await t("v3c-bank", "admin: ongeldige trigger faalt", () => assertFails(A().doc("questionBank/x").set(bankQ({ trigger: "misschien" }))));
+await t("v3c-bank", "admin: taaktekst > 120 faalt", () => assertFails(A().doc("questionBank/x").set(bankQ({ taskText: "x".repeat(121) }))));
+await t("v3c-bank", "admin: controlevraag met extra veld faalt", () => assertFails(A().doc("questionBank/x").set(bankQ({ followUp: { text: "a", trigger: "ja", taskText: "b", foto: "x" } }))));
+await t("v3c-bank", "admin: > 20 keuzes faalt", () => assertFails(A().doc("questionBank/x").set(bankQ({ reasons: Array(21).fill({ id: "a", label: "a", taskText: "b" }) }))));
+await t("v3c-bank", "admin: extra veld faalt", () => assertFails(A().doc("questionBank/x").set(bankQ({ foto: "x" }))));
+await t("v3c-bank", "admin: updatedAt geen servertijd faalt", () => assertFails(A().doc("questionBank/x").set(bankQ({ updatedAt: TS.now() }))));
+await t("v3c-bank", "admin: ongeldig id faalt", () => assertFails(A().doc("questionBank/met spatie").set(bankQ())));
+await t("v3c-bank", "medewerker: lezen (doc en lijst) en schrijven faalt", async () => { await seedDoc("questionBank/vast", { ...bankQ(), createdAt: TS.now(), updatedAt: TS.now() }); await assertFails(S().doc("questionBank/vast").get()); await assertFails(S().collection("questionBank").get()); await assertFails(S().doc("questionBank/nieuw").set(bankQ())); await assertFails(S().doc("questionBank/vast").delete()); });
+await t("v3c-bank", "reader: lezen en schrijven faalt", async () => { await seedDoc("questionBank/vast", { ...bankQ(), createdAt: TS.now(), updatedAt: TS.now() }); await assertFails(RD().doc("questionBank/vast").get()); await assertFails(RD().collection("questionBank").get()); await assertFails(RD().doc("questionBank/nieuw").set(bankQ())); });
+await t("v3c-bank", "anoniem: lezen en schrijven faalt", async () => { await seedDoc("questionBank/vast", { ...bankQ(), createdAt: TS.now(), updatedAt: TS.now() }); await assertFails(anonCtx().doc("questionBank/vast").get()); await assertFails(anonCtx().doc("questionBank/nieuw").set(bankQ())); });
+await t("v3c-bank", "bestaande regels ongewijzigd: variant en auditConfig blijven werken", async () => { await assertSucceeds(A().doc("auditVariants/standaard").set(variant())); await assertSucceeds(A().doc("auditConfig/current").set({ version: 3, updatedAt: ST(), sections: [] })); });
+
 await env.cleanup();
 for (const r of results) console.log(r.join(" | "));
 const pass = results.filter((r) => r[0] === "PASS").length;

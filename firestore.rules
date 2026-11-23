@@ -43,6 +43,10 @@
 // - staffProfiles/{employeeId} = {department?, canAdmin?, updatedAt}: admin schrijft; de medewerker leest alleen
 //   het eigen doc (get, geldige staff-sessie); de reader niets. canAdmin geeft GEEN rechten: alleen de knop naar ZLA,
 //   die zelf om de admin-login vraagt.
+// V3C (23-11-2026, admin v30) – zie zla-v3c-data-afspraak.md
+// - questionBank/{questionId} = {text 1-200, trigger "ja"|"nee", taskText? <= 120 | followUp? {text, trigger, taskText}
+//   | reasons? (lijst <= 20), createdAt?, updatedAt}: standaardvragen, alleen admin (lezen en schrijven).
+//   Alleen een uitbreiding: alle andere regels zijn gelijk aan v3b (a441a4c).
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -552,6 +556,32 @@ service cloud.firestore {
     match /auditVariants/{variantId} {
       allow read, delete: if isAdmin();
       allow create, update: if isAdmin() && isValidAuditVariant(variantId);
+    }
+
+    // V3C: standaardvragen (vragenbank), alleen admin. De diepe validatie van de vraag doet de admin-app.
+    function isValidBankQuestion(questionId) {
+      let d = request.resource.data;
+      return isSafeId(questionId)
+        && d.keys().hasOnly(["text", "trigger", "taskText", "followUp", "reasons", "createdAt", "updatedAt"])
+        && d.keys().hasAll(["text", "trigger", "updatedAt"])
+        && d.text is string
+        && d.text.trim().size() >= 1
+        && d.text.size() <= 200
+        && d.trigger in ["ja", "nee"]
+        && (!("taskText" in d) || (d.taskText is string && d.taskText.size() <= 120))
+        && (!("followUp" in d) || (d.followUp is map
+          && d.followUp.keys().hasOnly(["text", "trigger", "taskText"])
+          && d.followUp.text is string && d.followUp.text.size() <= 200
+          && d.followUp.trigger in ["ja", "nee"]
+          && d.followUp.taskText is string && d.followUp.taskText.size() <= 120))
+        && (!("reasons" in d) || (d.reasons is list && d.reasons.size() >= 1 && d.reasons.size() <= 20))
+        && (!("createdAt" in d) || d.createdAt is timestamp)
+        && d.updatedAt == request.time;
+    }
+
+    match /questionBank/{questionId} {
+      allow read, delete: if isAdmin();
+      allow create, update: if isAdmin() && isValidBankQuestion(questionId);
     }
 
     match /audits/{auditId} {

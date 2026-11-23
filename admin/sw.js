@@ -14,6 +14,8 @@ const ASSETS = [
   "./v3a-logic.js",
   "./v3b.js",
   "./v3b-logic.js",
+  "./v3c.js",
+  "./v3c-logic.js",
   "./admin.css",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
